@@ -1,0 +1,13 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Fonts (downloaded by setup.sh at install time)
+fonts/*.ttf
+fonts/*.otf
+
+# OS
+.DS_Store
+Thumbs.db
