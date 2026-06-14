@@ -41,7 +41,6 @@ class ST7789:
         self._spi.open(port, cs)
         self._spi.max_speed_hz = spi_speed_hz
         self._spi.mode = 0
-        self._spi.no_cs = True  # CS driven manually via GPIO
 
         self._reset()
         self._init()
