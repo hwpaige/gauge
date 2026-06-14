@@ -271,7 +271,7 @@ def main():
 
     disp = ST7789(
         port=0, cs=0,
-        dc=73, rst=72,          # PC9 = DC (pin 18), PC8 = RST (pin 22)
+        dc=231, rst=232,        # PH7 = DC (pin 18), PH8 = RST (pin 22)
         width=SCREEN_W, height=SCREEN_H,
         spi_speed_hz=16_000_000,
     )

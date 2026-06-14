@@ -9,12 +9,26 @@ import gpiod
 from gpiod.line import Direction, Value as GpioValue
 import numpy as np
 
-_CHUNK    = 4096
-_GPIOCHIP = '/dev/gpiochip0'
+_CHUNK = 4096
+
+def _find_gpiochip(label: str) -> str:
+    """Return the /dev/gpiochipN path whose label contains `label`."""
+    for n in range(8):
+        path = f'/dev/gpiochip{n}'
+        try:
+            with gpiod.Chip(path) as chip:
+                if label in chip.get_info().label:
+                    return path
+        except OSError:
+            break
+    raise RuntimeError(f"No gpiochip found with label containing {label!r}")
+
+# Allwinner H618 main GPIO controller (300b000.pinctrl, 288 lines)
+_GPIOCHIP = _find_gpiochip('300b000')
 
 
 class ST7789:
-    def __init__(self, port=0, cs=0, dc=73, rst=72,
+    def __init__(self, port=0, cs=0, dc=231, rst=232,
                  width=240, height=240, spi_speed_hz=16_000_000):
         self._w, self._h = width, height
         self._dc  = dc
