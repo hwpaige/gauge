@@ -99,6 +99,10 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   warn "Repo already exists — pulling latest changes..."
   git -C "$INSTALL_DIR" pull
 else
+  if [ -d "$INSTALL_DIR" ]; then
+    warn "Removing stale directory $INSTALL_DIR..."
+    rm -rf "$INSTALL_DIR"
+  fi
   git clone --branch "$GITHUB_BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
 ok "Repo cloned to $INSTALL_DIR"
