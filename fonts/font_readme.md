@@ -1,11 +1,8 @@
 # fonts/
 
-This directory is intentionally empty in the repo.
+D-DIN font files are committed to this repo and cloned automatically by `setup.sh`.
 
-The D-DIN font is downloaded automatically by `setup.sh` at install time
-from https://www.1001fonts.com/d-din-font.html
-
-Expected files after setup:
+Expected files:
 - D-DIN.ttf
 - D-DIN-Bold.ttf
 - D-DINCondensed.ttf

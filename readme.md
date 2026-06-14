@@ -75,12 +75,12 @@ ssh root@<ip-address>
 ### 3. Run setup
 
 ```bash
-wget https://raw.githubusercontent.com/your-username/cht-gauge/main/setup.sh
+wget https://raw.githubusercontent.com/hwpaige/gauge/master/setup.sh
 bash setup.sh
 ```
 
 The script will:
-- Set the hostname to `moto`
+- Set the hostname to `moto` (SSH via `root@moto.local` after reboot)
 - Enable SPI in `/boot/armbianEnv.txt`
 - Install all system and Python dependencies
 - Clone this repo to `/root/gauge`
