@@ -260,10 +260,23 @@ def read_cht(channel):
 
 # ── Main ──────────────────────────────────────────────────
 def main():
+    import st7789
+    import PIL.Image
+
+    # No framebuffer needed — pygame renders offscreen, frames pushed via SPI
+    os.environ.setdefault("SDL_VIDEODRIVER", "offscreen")
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-    pygame.display.set_caption("CHT Gauge")
+    screen = pygame.Surface((SCREEN_W, SCREEN_H))
     clock  = pygame.time.Clock()
+
+    disp = st7789.ST7789(
+        port=0, cs=0,
+        dc=24, rst=25,          # GPIO24 = DC, GPIO25 = RST
+        backlight=None,
+        width=SCREEN_W, height=SCREEN_H,
+        rotation=0, invert=True,
+        spi_speed_hz=40_000_000,
+    )
 
     font       = pygame.font.Font(FONT_BOLD,            26)
     small_font = pygame.font.Font(FONT_REGULAR,         12)
@@ -310,7 +323,9 @@ def main():
         draw_legend(screen, title_font)
         draw_time(screen, time_font)
 
-        pygame.display.flip()
+        disp.display(PIL.Image.frombytes(
+            'RGB', (SCREEN_W, SCREEN_H),
+            pygame.image.tostring(screen, 'RGB')))
         clock.tick(FPS)
 
     pygame.quit()
