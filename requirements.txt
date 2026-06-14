@@ -1,5 +1,4 @@
 pygame
-st7789
+numpy
 pillow
-RPi.GPIO
 spidev

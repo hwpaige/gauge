@@ -260,7 +260,7 @@ def read_cht(channel):
 
 # ── Main ──────────────────────────────────────────────────
 def main():
-    import st7789
+    from driver import ST7789
     import PIL.Image
 
     # No framebuffer needed — pygame renders offscreen, frames pushed via SPI
@@ -269,13 +269,11 @@ def main():
     screen = pygame.Surface((SCREEN_W, SCREEN_H))
     clock  = pygame.time.Clock()
 
-    disp = st7789.ST7789(
+    disp = ST7789(
         port=0, cs=0,
         dc=24, rst=25,          # GPIO24 = DC, GPIO25 = RST
-        backlight=None,
         width=SCREEN_W, height=SCREEN_H,
-        rotation=0, invert=True,
-        spi_speed_hz=40_000_000,
+        spi_speed_hz=16_000_000,
     )
 
     font       = pygame.font.Font(FONT_BOLD,            26)
