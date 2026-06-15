@@ -259,20 +259,21 @@ def read_cht(channel):
         return 120 + 60 * math.sin(t * 0.2 + 1)
 
 # ── Main ──────────────────────────────────────────────────
+# Kernel fb_st7789v driver exposes /dev/fb0 as a 240×280 framebuffer.
+# The display's visible window starts at GRAM row 40, so we render the
+# 240×240 gauge into rows 40-279 of the 240×280 fb surface.
+FB_H      = 280
+FB_Y_OFF  = 40   # rows of invisible GRAM above the visible panel
+
 def main():
-    from driver import ST7789
-    import PIL.Image
-
-    # No framebuffer needed — pygame renders offscreen, frames pushed via SPI
-    os.environ.setdefault("SDL_VIDEODRIVER", "offscreen")
+    os.environ.setdefault("SDL_VIDEODRIVER", "fbcon")
+    os.environ.setdefault("SDL_FBDEV",       "/dev/fb0")
     pygame.init()
-    screen = pygame.Surface((SCREEN_W, SCREEN_H))
-    clock  = pygame.time.Clock()
 
-    # Pin 18 = PI16 (272), Pin 22 = PC2 (66) — per WiringPi phyToGpio table for BPI M4 Zero
-    disp = ST7789(dc=272, rst=66,
-                  width=SCREEN_W, height=SCREEN_H,
-                  speed_hz=64_000_000, y_off=40)
+    # Full framebuffer surface (240×280); gauge is blitted at y=FB_Y_OFF
+    fb   = pygame.display.set_mode((SCREEN_W, FB_H), flags=0)
+    gauge_surf = pygame.Surface((SCREEN_W, SCREEN_H))
+    clock = pygame.time.Clock()
 
     font       = pygame.font.Font(FONT_BOLD,            26)
     small_font = pygame.font.Font(FONT_REGULAR,         12)
@@ -310,18 +311,18 @@ def main():
         draw_gauge_shapes(ss, gc_ss, cht1, 0, 300, LEFT_ARC_START,  LEFT_ARC_END,  gr_ss, aw_ss)
         draw_gauge_shapes(ss, gc_ss, cht2, 0, 300, RIGHT_ARC_START, RIGHT_ARC_END, gr_ss, aw_ss)
         draw_plot(ss, hist1, hist2, scale=SSAA)
-        screen.blit(pygame.transform.smoothscale(ss, (SCREEN_W, SCREEN_H)), (0, 0))
+        gauge_surf.blit(pygame.transform.smoothscale(ss, (SCREEN_W, SCREEN_H)), (0, 0))
 
         # Text at native resolution
-        draw_header(screen, title_font)
-        draw_gauge_text(screen, GAUGE_CENTER, cht1, 0, 300, "CYL 1", font, small_font, LEFT_ARC_START,  LEFT_ARC_END)
-        draw_gauge_text(screen, GAUGE_CENTER, cht2, 0, 300, "CYL 2", font, small_font, RIGHT_ARC_START, RIGHT_ARC_END)
-        draw_legend(screen, title_font)
-        draw_time(screen, time_font)
+        draw_header(gauge_surf, title_font)
+        draw_gauge_text(gauge_surf, GAUGE_CENTER, cht1, 0, 300, "CYL 1", font, small_font, LEFT_ARC_START,  LEFT_ARC_END)
+        draw_gauge_text(gauge_surf, GAUGE_CENTER, cht2, 0, 300, "CYL 2", font, small_font, RIGHT_ARC_START, RIGHT_ARC_END)
+        draw_legend(gauge_surf, title_font)
+        draw_time(gauge_surf, time_font)
 
-        disp.display(PIL.Image.frombytes(
-            'RGB', (SCREEN_W, SCREEN_H),
-            pygame.image.tostring(screen, 'RGB')))
+        fb.fill(BG_COLOR)
+        fb.blit(gauge_surf, (0, FB_Y_OFF))
+        pygame.display.flip()
         clock.tick(FPS)
 
     pygame.quit()
