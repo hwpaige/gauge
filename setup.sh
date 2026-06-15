@@ -48,8 +48,8 @@ else
 fi
 ok "Hostname set to ${HOSTNAME}"
 
-# ── 2. SPI ────────────────────────────────────────────────
-log "Configuring SPI in /boot/armbianEnv.txt..."
+# ── 2. SPI (for potential future sensors; display uses kernel fb driver) ────
+log "Configuring SPI in /boot/armbianEnv.txt (spidev)..."
 ARMBIAN_ENV="/boot/armbianEnv.txt"
 
 if grep -q "overlays=" "$ARMBIAN_ENV"; then
@@ -70,6 +70,10 @@ if ! grep -q "param_spidev_spi_bus" "$ARMBIAN_ENV"; then
 else
   ok "param_spidev_spi_bus already set"
 fi
+
+warn "NOTE: For the gauge display you must ALSO configure a kernel ST7789 framebuffer overlay (see README 'Kernel framebuffer driver' section)."
+warn "The main gauge app now requires /dev/fb0 owned by the kernel (avoids GPIO 'busy' and gives smooth updates)."
+warn "Setup only enables spidev here; the fb panel overlay + reboot is a manual step (or add your st7789-fb.dts + user_overlays before the final reboot)."
 
 # ── 3. System packages ────────────────────────────────────
 log "Updating package list..."
@@ -130,10 +134,12 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "  ${CYAN}Project:${NC}       $INSTALL_DIR"
 echo -e "  ${CYAN}Run gauge:${NC}     $INSTALL_DIR/run.sh"
-echo -e "  ${CYAN}Test display:${NC}  cd $INSTALL_DIR && source venv/bin/activate && python3 test_display.py"
+echo -e "  ${CYAN}Test display:${NC}  See README (kernel /dev/fb0 must be active first)"
 echo -e "  ${CYAN}SSH:${NC}           ssh root@${HOSTNAME}.local"
 echo ""
-echo -e "  ${YELLOW}NOTE: A reboot is required for SPI to activate.${NC}"
+echo -e "  ${YELLOW}NOTE: A reboot is required for SPI/fb overlay to activate.${NC}"
+echo -e "  ${YELLOW}      IMPORTANT: Configure the kernel ST7789 framebuffer overlay BEFORE rebooting for gauge to work (see README).${NC}"
+echo -e "      Without it you will hit 'Device or resource busy' or the round display won't be /dev/fb0.${NC}"
 echo ""
 
 read -rp "Reboot now? (y/n): " -n 1

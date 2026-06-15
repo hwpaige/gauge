@@ -1,6 +1,14 @@
 """
-test_display.py — Quick SPI display sanity check.
-Fills the screen red. If it works, wiring and SPI are good.
+test_display.py — LEGACY userspace SPI display test (Pimoroni st7789 + PIL).
+Fills the screen red via direct Python driver.
+
+WARNING: Once you have the kernel framebuffer overlay active (recommended),
+the kernel owns the display GPIOs/SPI and this will fail with:
+  OSError: [Errno 16] Device or resource busy
+
+Use the fb-based test in the README instead, or run this only before
+configuring the kernel st7789 fb driver.
+
 Run from inside the venv: python3 test_display.py
 """
 

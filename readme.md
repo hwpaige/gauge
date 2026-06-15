@@ -13,23 +13,28 @@ A twin cylinder head temperature (CHT) gauge running on a Banana Pi M4 Zero, dis
 | Thermocouple | MAX31855 or MAX6675 breakout (×2, one per cylinder) |
 | OS | Armbian Debian Trixie Minimal |
 
+**Important**: The kernel must provide `/dev/fb0` for the ST7789 (see "Kernel framebuffer driver" below). The Python app no longer drives the display directly.
+
 ---
 
 ## Wiring
 
 ### Display → BPI M4 Zero 40-pin header
 
-| Display Pin | Signal | BPI Header Pin |
-|---|---|---|
-| VCC | 3.3V | Pin 1 |
-| GND | GND | Pin 6 |
-| CS | SPI0 CE0 | Pin 24 |
-| SCK | SPI0 SCLK | Pin 23 |
-| MOSI | SPI0 MOSI | Pin 19 |
-| DC | GPIO 9 (BCM) | Pin 21 |
-| BL | GPIO 19 (BCM) | Pin 35 |
+The kernel framebuffer overlay (not the Python app) owns the pins. Example mapping used by current overlays/driver code (confirm against your .dts):
 
-> The BL (backlight) pin can be tied directly to 3.3V if software brightness control is not needed.
+| Display Pin | Signal          | BPI Header Pin | Notes (Allwinner)     |
+|-------------|-----------------|----------------|-----------------------|
+| VCC         | 3.3V            | Pin 1          |                       |
+| GND         | GND             | Pin 6          |                       |
+| CS          | SPI1 CS0 (PH5)  | Pin 24         |                       |
+| SCK         | SPI1 SCLK (PH6) | Pin 23         |                       |
+| MOSI        | SPI1 MOSI (PH7) | Pin 19         |                       |
+| DC          | PI16            | Pin 18         | (offset 272)          |
+| RST         | PC2             | Pin 22         | (offset 66)           |
+| (BL)        | (backlight)     | (Pin 35)       | Tie to 3.3V (Pin 1) if not software-controlled |
+
+> Backlight: tie BL directly to 3.3V for always-on (recommended for gauge). The kernel panel driver typically handles reset/DC in its DT.
 
 ### Thermocouple (MAX31855 / MAX6675) — to be wired
 
@@ -42,9 +47,11 @@ Thermocouples share the SPI bus with the display using separate CS pins. Wiring 
 ```
 cht-gauge/
 ├── setup.sh          # One-shot bootstrap — run on fresh Armbian flash
-├── gauge.py          # Main application
-├── run.sh            # Launch script (sets SDL framebuffer env vars)
-├── test_display.py   # Sanity check — fills screen red to verify SPI/wiring
+├── gauge.py          # Main application (uses kernel /dev/fb0)
+├── run.sh            # Launch script
+├── test_display.py   # Legacy userspace test (may fail once kernel owns display)
+├── pin_test.py       # Dev tool for probing GPIOs/SPI (kernel pins will be busy)
+├── driver.py         # Legacy userspace ST7789 driver (kept for reference)
 ├── .gitignore
 └── fonts/
     └── README.md     # Fonts are downloaded by setup.sh, not committed to repo
@@ -96,13 +103,30 @@ ssh root@moto.local
 
 ### 4. Test the display
 
+Once the kernel framebuffer driver is active (see below), the display is the system primary framebuffer. A basic test that the fb is working:
+
+```bash
+cat /dev/urandom > /dev/fb0   # noise on screen; Ctrl-C to stop
+```
+
+Or (inside venv):
+
 ```bash
 cd /root/gauge
 source venv/bin/activate
-python3 test_display.py
+python3 -c "
+import pygame, os
+os.environ['SDL_VIDEODRIVER']='fbcon'; os.environ['SDL_FBDEV']='/dev/fb0'
+pygame.init()
+s = pygame.display.set_mode((240,280))
+s.fill((255,0,0)); pygame.display.flip()
+input('red fb - press enter'); pygame.quit()
+"
 ```
 
-The screen should fill solid red. If it does, SPI and wiring are good.
+(If the legacy `test_display.py` using the Python `st7789` package fails with EBUSY, that is expected once the kernel driver owns the pins — it is no longer needed.)
+
+See "Kernel framebuffer driver" section for how the display becomes `/dev/fb0`.
 
 ### 5. Run the gauge
 
@@ -110,11 +134,17 @@ The screen should fill solid red. If it does, SPI and wiring are good.
 /root/gauge/run.sh
 ```
 
+(Or manually: `cd /root/gauge && source venv/bin/activate && python3 gauge.py`)
+
 ---
 
 ## Application
 
-`gauge.py` renders two CHT gauges using **pygame** directed at the Linux framebuffer (`/dev/fb0`) via SDL — no desktop environment required.
+`gauge.py` renders two CHT gauges using **pygame** directed at the Linux framebuffer (`/dev/fb0`) via SDL fbcon — no desktop environment required.
+
+The kernel (via a DT overlay for the ST7789 panel, typically exposing `fb_st7789v` or a tinydrm/fbdev panel) must own the SPI + DC/RST GPIOs and register the display as `/dev/fb0` (configured as 240×280 logical fb with the round 240×240 visible area starting at row 40). This gives rock-solid vsync/tearing-free updates ("super smooth with no flickering").
+
+The old userspace Python ST7789 + gpiod + spidev driver path has been removed from the main app (it conflicts with "Device or resource busy" once the kernel claims the pins).
 
 ### Gauge design
 
@@ -158,15 +188,53 @@ Installed by `setup.sh`:
 - `avahi-daemon` — enables `.local` mDNS hostname resolution
 - `libsdl2-dev`, `libsdl2-image-dev`, `libsdl2-ttf-dev` — pygame display
 
-### Python packages
+### Python packages (runtime)
 
 Installed into `/root/gauge/venv`:
 
-- `pygame` — rendering engine
-- `st7789` — Pimoroni ST7789 display driver
-- `pillow` — image handling (used by st7789)
-- `spidev` — SPI bus access
-- `RPi.GPIO` — GPIO control
+- `pygame` — rendering engine (fbcon targeting kernel `/dev/fb0`)
+
+`st7789`, `pillow`, `spidev`, `gpiod`, `numpy` are also pulled in for the legacy test scripts only.
+
+---
+
+## Kernel framebuffer driver (required)
+
+After the initial `setup.sh` (which only enables spidev), you must make the ST7789 the kernel's primary framebuffer (`/dev/fb0`) so that:
+
+- The kernel owns DC, RST, and the SPI pins (your app will no longer get "Device or resource busy").
+- Updates are smooth / tear-free (as you observed after the reboot that made the round display primary).
+
+Typical steps (edit as root):
+
+1. Create a device-tree overlay (example name `st7789-fb.dts`) in `/boot/overlay-user/` (or `/boot/dtb/overlay/` depending on Armbian version). A minimal overlay declares the spi bus + panel compatible (sitronix,st7789v or fbtft), with the correct GPIOs for your board (DC=PI16/272 on pin 18, RST=PC2/66 on pin 22, SPI1 on PH5-8), width/height, and any rotation/x/y offsets the round visible area needs (the gauge code assumes a 240×280 fb with visible content at y=40).
+
+2. Compile it:
+   ```
+   armbian-add-overlay /boot/overlay-user/st7789-fb.dts
+   ```
+   (or `dtc -@ -I dts -O dtb -o /boot/dtb/allwinner/overlay/st7789-fb.dtbo ...` and add to user_overlays).
+
+3. Edit `/boot/armbianEnv.txt`:
+   ```
+   overlays=... spi-spidev   # or remove spidev if the panel driver claims the bus exclusively
+   user_overlays=st7789-fb
+   # extraargs or param_ lines as required by your overlay (bus num, speed, etc.)
+   ```
+
+4. Reboot.
+
+5. Verify:
+   ```
+   ls -l /dev/fb0
+   fbset   # or cat /sys/class/graphics/fb0/virtual_size  (expect something like 240x280)
+   ```
+
+Once `/dev/fb0` is the round display, `python3 gauge.py` (or `run.sh`) will use it directly and be super smooth.
+
+If you have a working overlay .dts that matches the Pimoroni 1.3" + BPI M4 Zero pinout (SPI1, offsets 272/66, y_off=40), contribute it!
+
+The gauge code hard-codes the 240×280 / y=40 layout that the kernel driver must expose for the round 240×240 visible panel.
 
 ---
 

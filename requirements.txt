@@ -1,4 +1,9 @@
+# Runtime (gauge.py uses only this when kernel provides /dev/fb0 via fbcon)
 pygame
+
+# Dev / legacy test scripts only (test_display.py, pin_test.py, driver.py).
+# These are NOT used by the main gauge app once the kernel ST7789 fb driver
+# owns the display pins/SPI (prevents EBUSY and enables smooth updates).
 numpy
 pillow
 spidev
