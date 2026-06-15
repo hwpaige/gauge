@@ -140,7 +140,42 @@ See "Kernel framebuffer driver" section for how the display becomes `/dev/fb0`.
 
 - Easiest for testing: Plug a USB keyboard into the Banana Pi. The round display should be showing the login prompt. Login directly there as root and run the command on that console.
 - SSH sessions often produce `pygame.error: fbcon not available` because the SDL fbcon driver needs a real virtual terminal context.
-- For production: create a systemd service that launches it on boot.
+- For production (recommended): use the included `gauge.service` so it starts automatically on boot and takes over the round display console. No keyboard or SSH run needed after setup.
+
+### Auto-start via systemd (recommended)
+
+From SSH on the Pi:
+
+```bash
+cd /root/gauge
+git pull   # get the latest gauge.service if you haven't already
+
+sudo cp gauge.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now gauge.service
+
+# Optional: stop the default getty so the gauge owns the console cleanly
+# (the service tries to chvt to tty1)
+sudo systemctl stop getty@tty1.service
+sudo systemctl disable getty@tty1.service
+```
+
+Check status:
+
+```bash
+systemctl status gauge.service
+journalctl -u gauge.service -f
+```
+
+To stop it temporarily and get a console back:
+
+```bash
+sudo systemctl stop gauge.service
+sudo chvt 1
+# or reboot
+```
+
+The service is configured to restart on failure and attaches to the framebuffer console.
 
 See the on-screen error message in the new gauge.py for more details and a quick kernel-fb test command that *does* work over SSH.
 
