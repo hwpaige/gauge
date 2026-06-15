@@ -11,18 +11,25 @@ Environment=SDL_VIDEODRIVER=fbcon
 Environment=SDL_FBDEV=/dev/fb0
 Environment=PYTHONUNBUFFERED=1
 
-# Try to switch to the primary console and disable cursor (best effort)
-ExecStartPre=-/bin/sh -c 'chvt 1 2>/dev/null || true; echo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true'
+# Aggressively take over the console (stop any getty that might be on tty1 or serial)
+ExecStartPre=-/bin/sh -c '
+  chvt 1 2>/dev/null || true
+  echo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true
+  systemctl stop getty@tty1.service serial-getty@ttyS0.service serial-getty@ttyAMA0.service 2>/dev/null || true
+'
 
 ExecStart=/root/gauge/venv/bin/python3 /root/gauge/gauge.py
 
-# Keep it alive if it crashes
+# Keep it alive if it crashes (it will retry every few seconds)
 Restart=always
-RestartSec=3
+RestartSec=5
 
-# Attach output to the real console so it takes over the display
-StandardOutput=tty
-StandardError=tty
+# Log to journal (view with journalctl -u gauge.service).
+# This prevents error text from being painted directly onto the framebuffer as "terminal" output.
+# When the gauge successfully initializes, it will draw its graphics over the fb.
+StandardOutput=journal
+StandardError=journal
+# We still try to attach to the right tty for the driver
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
