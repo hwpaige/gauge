@@ -1,7 +1,6 @@
 import os
 import struct
 import mmap
-import fcntl
 
 # We render offscreen and write directly to the kernel's /dev/fb0.
 # This avoids depending on SDL's fbcon video driver (which is often missing or
@@ -44,7 +43,7 @@ def _surface_to_fb565(surface):
 
 # ── Config ────────────────────────────────────────────────
 SCREEN_W, SCREEN_H = 240, 240
-FPS = 30
+FPS = 10
 
 GAUGE_CENTER = (120, 120)
 GAUGE_RADIUS = 118
@@ -329,9 +328,6 @@ def main():
     fb_fd = open('/dev/fb0', 'r+b', buffering=0)
     fb_map = mmap.mmap(fb_fd.fileno(), SCREEN_W * FB_H * 2)  # 240x280 RGB565 = 2 bytes/pixel
 
-    # FBIO_WAITFORVSYNC constant (works on most ARM fbdev)
-    FBIO_WAITFORVSYNC = 0x40044620
-
     # DEBUG / visibility test: immediately write a full bright red frame so you can
     # confirm that our writes are actually reaching the panel hardware.
     # If you see solid red for ~1.5s, then the write path works and we know the
@@ -422,15 +418,6 @@ def main():
 
         fb_map[:] = buf
         fb_map.flush()
-
-        # Wait for vsync *after* the update. This lets the first frame go out immediately,
-        # then subsequent frames are timed to the display's blanking period (like the
-        # smooth kernel console you saw). If the driver doesn't support the ioctl we just
-        # free-run at the FPS rate.
-        try:
-            fcntl.ioctl(fb_fd, FBIO_WAITFORVSYNC)
-        except Exception:
-            pass
 
         clock.tick(FPS)
 
