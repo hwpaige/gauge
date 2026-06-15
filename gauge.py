@@ -43,7 +43,7 @@ def _surface_to_fb565(surface):
 
 # ── Config ────────────────────────────────────────────────
 SCREEN_W, SCREEN_H = 240, 240
-FPS = 10
+FPS = 30
 
 GAUGE_CENTER = (120, 120)
 GAUGE_RADIUS = 118
@@ -122,10 +122,9 @@ def _readout_pos(center, arc_start, arc_end, radius):
     return (int(x + r * math.cos(a)), int(y + r * math.sin(a)))
 
 # ── Shape drawing (runs on supersampled surface) ──────────
-def draw_gauge_shapes(surface, center, value, min_val, max_val,
-                      arc_start, arc_end, radius, arc_width):
+def draw_gauge_background(surface, center, arc_start, arc_end, radius, arc_width):
+    """Static elements: zone bands and tick marks. Pre-render once."""
     x, y  = center
-    pct   = max(0.0, min(1.0, (value - min_val) / (max_val - min_val)))
     scale = radius / GAUGE_RADIUS
 
     p60 = arc_start + 0.60 * (arc_end - arc_start)
@@ -133,10 +132,6 @@ def draw_gauge_shapes(surface, center, value, min_val, max_val,
     draw_arc(surface, ZONE_GREEN, center, radius, arc_start, p60,     arc_width)
     draw_arc(surface, ZONE_AMBER, center, radius, p60,       p85,     arc_width)
     draw_arc(surface, ZONE_RED,   center, radius, p85,       arc_end, arc_width)
-
-    if pct > 0:
-        draw_arc(surface, _arc_color(pct), center, radius,
-                 arc_start, arc_start + pct * (arc_end - arc_start), arc_width)
 
     outer_r = radius - arc_width - 2 * scale
     for i in range(11):
@@ -149,6 +144,14 @@ def draw_gauge_shapes(surface, center, value, min_val, max_val,
                          (x + outer_r * math.cos(ta), y + outer_r * math.sin(ta)),
                          (x + inner_r * math.cos(ta), y + inner_r * math.sin(ta)),
                          lw)
+
+def draw_gauge_indicator(surface, center, value, min_val, max_val,
+                         arc_start, arc_end, radius, arc_width):
+    """Dynamic element: the filled arc showing current value."""
+    pct = max(0.0, min(1.0, (value - min_val) / (max_val - min_val)))
+    if pct > 0:
+        draw_arc(surface, _arc_color(pct), center, radius,
+                 arc_start, arc_start + pct * (arc_end - arc_start), arc_width)
 
 # ── Text drawing (runs on native-resolution surface) ──────
 def draw_gauge_text(surface, center, value, min_val, max_val,
@@ -337,7 +340,6 @@ def main():
     red_surf.fill((255, 0, 0))
     buf = _surface_to_fb565(red_surf)
     fb_map[:] = buf
-    fb_map.flush()
     import time
     time.sleep(1.5)
 
@@ -354,6 +356,13 @@ def main():
     gr_ss = GAUGE_RADIUS * SSAA
     aw_ss = ARC_WIDTH    * SSAA
 
+    # Pre-render static elements (zone bands + tick marks) once.
+    # These never change at runtime — only the indicator arcs and text change.
+    ss_static = pygame.Surface((SCREEN_W * SSAA, SCREEN_H * SSAA))
+    ss_static.fill(BG_COLOR)
+    draw_gauge_background(ss_static, gc_ss, LEFT_ARC_START,  LEFT_ARC_END,  gr_ss, aw_ss)
+    draw_gauge_background(ss_static, gc_ss, RIGHT_ARC_START, RIGHT_ARC_END, gr_ss, aw_ss)
+
     hist1 = deque([150.0] * PLOT_LEN, maxlen=PLOT_LEN)
     hist2 = deque([150.0] * PLOT_LEN, maxlen=PLOT_LEN)
     frame = 0
@@ -361,9 +370,9 @@ def main():
     # Do one full draw cycle for the very first real frame (using initial simulated values)
     cht1 = read_cht(0)
     cht2 = read_cht(1)
-    ss.fill(BG_COLOR)
-    draw_gauge_shapes(ss, gc_ss, cht1, 0, 300, LEFT_ARC_START,  LEFT_ARC_END,  gr_ss, aw_ss)
-    draw_gauge_shapes(ss, gc_ss, cht2, 0, 300, RIGHT_ARC_START, RIGHT_ARC_END, gr_ss, aw_ss)
+    ss.blit(ss_static, (0, 0))
+    draw_gauge_indicator(ss, gc_ss, cht1, 0, 300, LEFT_ARC_START,  LEFT_ARC_END,  gr_ss, aw_ss)
+    draw_gauge_indicator(ss, gc_ss, cht2, 0, 300, RIGHT_ARC_START, RIGHT_ARC_END, gr_ss, aw_ss)
     draw_plot(ss, hist1, hist2, scale=SSAA)
     gauge_surf.blit(pygame.transform.smoothscale(ss, (SCREEN_W, SCREEN_H)), (0, 0))
 
@@ -377,7 +386,6 @@ def main():
     full_fb.blit(gauge_surf, (0, FB_Y_OFF))
     buf = _surface_to_fb565(full_fb)
     fb_map[:] = buf
-    fb_map.flush()
     print("First real gauge frame written to /dev/fb0")
 
     running = True
@@ -396,10 +404,10 @@ def main():
             hist1.append(cht1)
             hist2.append(cht2)
 
-        # Shapes + plot at 2× → smoothscale gives AA
-        ss.fill(BG_COLOR)
-        draw_gauge_shapes(ss, gc_ss, cht1, 0, 300, LEFT_ARC_START,  LEFT_ARC_END,  gr_ss, aw_ss)
-        draw_gauge_shapes(ss, gc_ss, cht2, 0, 300, RIGHT_ARC_START, RIGHT_ARC_END, gr_ss, aw_ss)
+        # Blit pre-rendered static background, then draw only the dynamic arcs + plot.
+        ss.blit(ss_static, (0, 0))
+        draw_gauge_indicator(ss, gc_ss, cht1, 0, 300, LEFT_ARC_START,  LEFT_ARC_END,  gr_ss, aw_ss)
+        draw_gauge_indicator(ss, gc_ss, cht2, 0, 300, RIGHT_ARC_START, RIGHT_ARC_END, gr_ss, aw_ss)
         draw_plot(ss, hist1, hist2, scale=SSAA)
         gauge_surf.blit(pygame.transform.smoothscale(ss, (SCREEN_W, SCREEN_H)), (0, 0))
 
@@ -417,7 +425,6 @@ def main():
         buf = _surface_to_fb565(full_fb)
 
         fb_map[:] = buf
-        fb_map.flush()
 
         clock.tick(FPS)
 
