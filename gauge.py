@@ -2,9 +2,6 @@ import os
 import struct
 import mmap
 
-# We render offscreen and write directly to the kernel's /dev/fb0.
-# This avoids depending on SDL's fbcon video driver (which is often missing or
-# broken in packaged SDL2 on Armbian for these boards).
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_FBDEV", "/dev/fb0")
 
@@ -309,38 +306,50 @@ FB_H      = 280
 FB_Y_OFF  = 40   # rows of invisible GRAM above the visible panel
 
 def main():
-    print("Using direct /dev/fb0 write (bypassing SDL fbcon)")
-    print("SDL_VIDEODRIVER =", os.environ.get("SDL_VIDEODRIVER"))
-    print("SDL_FBDEV =", os.environ.get("SDL_FBDEV"))
-
-    if not os.path.exists("/dev/fb0"):
-        print("ERROR: /dev/fb0 does not exist!")
-        print("The kernel ST7789/fb driver is not providing the framebuffer.")
-        print("Fix the DT overlay first (see README).")
-        raise SystemExit(1)
+    import time
 
     pygame.display.init()
     pygame.font.init()
 
-    full_fb = pygame.Surface((SCREEN_W, FB_H))
+    full_fb    = pygame.Surface((SCREEN_W, FB_H))
     gauge_surf = pygame.Surface((SCREEN_W, SCREEN_H))
-    clock = pygame.time.Clock()
+    clock      = pygame.time.Clock()
 
-    # Open the framebuffer once and mmap it for fast zero-copy updates.
-    # This is much more efficient than open/write/close every frame.
-    fb_fd = open('/dev/fb0', 'r+b', buffering=0)
-    fb_map = mmap.mmap(fb_fd.fileno(), SCREEN_W * FB_H * 2)  # 240x280 RGB565 = 2 bytes/pixel
+    # ── Display backend selection ──────────────────────────────────────────────
+    # Prefer panel-mipi-dbi DRM (card1) for double-buffered vsync page flips.
+    # Fall back to /dev/fb0 fbtft mmap if DRM isn't available.
+    drm = None
+    fb_fd = None
+    fb_map = None
 
-    # DEBUG / visibility test: immediately write a full bright red frame so you can
-    # confirm that our writes are actually reaching the panel hardware.
-    # If you see solid red for ~1.5s, then the write path works and we know the
-    # problem is in the drawing / gauge content.
-    print("DEBUG: writing full red test frame to /dev/fb0 ...")
+    if os.path.exists('/dev/dri/card1'):
+        try:
+            from drm_flip import DrmFlip
+            drm = DrmFlip('/dev/dri/card1')
+            print(f"DRM backend: /dev/dri/card1  {drm.width}x{drm.height}")
+        except Exception as e:
+            print(f"DRM init failed ({e}), falling back to /dev/fb0")
+            drm = None
+
+    if drm is None:
+        if not os.path.exists('/dev/fb0'):
+            print("ERROR: neither /dev/dri/card1 nor /dev/fb0 found.")
+            raise SystemExit(1)
+        fb_fd  = open('/dev/fb0', 'r+b', buffering=0)
+        fb_map = mmap.mmap(fb_fd.fileno(), SCREEN_W * FB_H * 2)
+        print("fbdev backend: /dev/fb0")
+
+    def write_frame(buf):
+        if drm:
+            drm.back_buffer[:] = buf
+            drm.flip()          # blocks until SPI push completes
+        else:
+            fb_map[:] = buf
+
+    # Startup visibility test: solid red for 1.5 s
     red_surf = pygame.Surface((SCREEN_W, FB_H))
     red_surf.fill((255, 0, 0))
-    buf = _surface_to_fb565(red_surf)
-    fb_map[:] = buf
-    import time
+    write_frame(_surface_to_fb565(red_surf))
     time.sleep(1.5)
 
     # Now clear to our normal BG and do a full first gauge draw + write
@@ -384,9 +393,8 @@ def main():
 
     full_fb.fill(BG_COLOR)
     full_fb.blit(gauge_surf, (0, FB_Y_OFF))
-    buf = _surface_to_fb565(full_fb)
-    fb_map[:] = buf
-    print("First real gauge frame written to /dev/fb0")
+    write_frame(_surface_to_fb565(full_fb))
+    print("First real gauge frame written")
 
     running = True
     while running:
@@ -404,37 +412,35 @@ def main():
             hist1.append(cht1)
             hist2.append(cht2)
 
-        # Blit pre-rendered static background, then draw only the dynamic arcs + plot.
         ss.blit(ss_static, (0, 0))
         draw_gauge_indicator(ss, gc_ss, cht1, 0, 300, LEFT_ARC_START,  LEFT_ARC_END,  gr_ss, aw_ss)
         draw_gauge_indicator(ss, gc_ss, cht2, 0, 300, RIGHT_ARC_START, RIGHT_ARC_END, gr_ss, aw_ss)
         draw_plot(ss, hist1, hist2, scale=SSAA)
         gauge_surf.blit(pygame.transform.smoothscale(ss, (SCREEN_W, SCREEN_H)), (0, 0))
 
-        # Text at native resolution
         draw_header(gauge_surf, title_font)
         draw_gauge_text(gauge_surf, GAUGE_CENTER, cht1, 0, 300, "CYL 1", font, small_font, LEFT_ARC_START,  LEFT_ARC_END)
         draw_gauge_text(gauge_surf, GAUGE_CENTER, cht2, 0, 300, "CYL 2", font, small_font, RIGHT_ARC_START, RIGHT_ARC_END)
         draw_legend(gauge_surf, title_font)
         draw_time(gauge_surf, time_font)
 
-        # Compose full fb (with y offset) and write raw to the kernel framebuffer device.
-        # This is what actually appears on the round display.
         full_fb.fill(BG_COLOR)
         full_fb.blit(gauge_surf, (0, FB_Y_OFF))
-        buf = _surface_to_fb565(full_fb)
+        write_frame(_surface_to_fb565(full_fb))
 
-        fb_map[:] = buf
-
-        clock.tick(FPS)
+        if drm is None:
+            clock.tick(FPS)     # DRM flip() already rate-limits via vsync wait
 
     pygame.quit()
 
-    try:
-        fb_map.close()
-        fb_fd.close()
-    except Exception:
-        pass
+    if drm:
+        drm.close()
+    else:
+        try:
+            fb_map.close()
+            fb_fd.close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()
