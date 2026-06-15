@@ -1,6 +1,11 @@
+import os
+
+# Must set SDL driver env vars BEFORE importing pygame so SDL2 picks fbcon at init time.
+os.environ["SDL_VIDEODRIVER"] = "fbcon"
+os.environ["SDL_FBDEV"] = "/dev/fb0"
+
 import pygame
 import math
-import os
 from collections import deque
 from datetime import datetime
 
@@ -266,12 +271,44 @@ FB_H      = 280
 FB_Y_OFF  = 40   # rows of invisible GRAM above the visible panel
 
 def main():
-    os.environ.setdefault("SDL_VIDEODRIVER", "fbcon")
-    os.environ.setdefault("SDL_FBDEV",       "/dev/fb0")
-    pygame.init()
+    print("SDL_VIDEODRIVER =", os.environ.get("SDL_VIDEODRIVER"))
+    print("SDL_FBDEV =", os.environ.get("SDL_FBDEV"))
+    print("Checking framebuffer...")
 
-    # Full framebuffer surface (240×280); gauge is blitted at y=FB_Y_OFF
-    fb   = pygame.display.set_mode((SCREEN_W, FB_H), flags=0)
+    if not os.path.exists("/dev/fb0"):
+        print("ERROR: /dev/fb0 does not exist. The kernel ST7789 driver is not providing the framebuffer.")
+        print("See the README section on enabling the kernel framebuffer overlay.")
+        raise SystemExit(1)
+
+    try:
+        pygame.init()
+        # Full framebuffer surface (240×280); gauge is blitted at y=FB_Y_OFF
+        fb = pygame.display.set_mode((SCREEN_W, FB_H), flags=0)
+    except pygame.error as e:
+        msg = str(e)
+        print("pygame.error:", msg)
+        if "fbcon" in msg.lower() or "not available" in msg.lower():
+            print("\n" + "="*60)
+            print("FIX: 'fbcon not available' almost always means you are running")
+            print("     this over SSH. The SDL fbcon driver needs to run in the")
+            print("     context of the actual Linux virtual console (the one the")
+            print("     kernel is using for the round display).")
+            print("")
+            print("How to run it:")
+            print("  1. Plug a USB keyboard into the Banana Pi.")
+            print("  2. The round display should already be showing the Linux")
+            print("     console / login prompt (it's the primary display now).")
+            print("  3. Login directly as root on the round display (no SSH).")
+            print("  4. cd ~/gauge && source venv/bin/activate && python3 gauge.py")
+            print("")
+            print("Alternative (no keyboard needed long-term):")
+            print("  Create a systemd service that starts the gauge on boot")
+            print("  while the console is on the framebuffer.")
+            print("")
+            print("Quick test that the kernel fb itself is working (from SSH is fine):")
+            print("  cat /dev/urandom > /dev/fb0   # noise for 1-2s, then Ctrl-C")
+            print("="*60 + "\n")
+        raise
     gauge_surf = pygame.Surface((SCREEN_W, SCREEN_H))
     clock = pygame.time.Clock()
 
