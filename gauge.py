@@ -269,12 +269,10 @@ def main():
     screen = pygame.Surface((SCREEN_W, SCREEN_H))
     clock  = pygame.time.Clock()
 
-    disp = ST7789(
-        port=0, cs=0,
-        dc=231, rst=232, cs_gpio=67,  # PH7=DC(pin18), PH8=RST(pin22), PC3=CS(pin24)
-        width=SCREEN_W, height=SCREEN_H,
-        spi_speed_hz=16_000_000,
-    )
+    # Pin 18 = PI16 (272), Pin 22 = PC2 (66) — per WiringPi phyToGpio table for BPI M4 Zero
+    disp = ST7789(dc=272, rst=66,
+                  width=SCREEN_W, height=SCREEN_H,
+                  speed_hz=64_000_000, y_off=40)
 
     font       = pygame.font.Font(FONT_BOLD,            26)
     small_font = pygame.font.Font(FONT_REGULAR,         12)
