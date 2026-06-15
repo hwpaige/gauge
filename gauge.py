@@ -320,7 +320,8 @@ def main():
         print("Fix the DT overlay first (see README).")
         raise SystemExit(1)
 
-    pygame.init()   # dummy driver (set above) — we don't use any real video output
+    pygame.display.init()
+    pygame.font.init()
 
     full_fb = pygame.Surface((SCREEN_W, FB_H))
     gauge_surf = pygame.Surface((SCREEN_W, SCREEN_H))

@@ -12,11 +12,10 @@ Environment=SDL_FBDEV=/dev/fb0
 Environment=PYTHONUNBUFFERED=1
 
 # Best-effort console cleanup so nothing else is fighting the fb
-ExecStartPre=-/bin/sh -c '
-  chvt 1 2>/dev/null || true
-  echo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true
-  systemctl stop getty@tty1.service serial-getty@ttyS0.service serial-getty@ttyAMA0.service 2>/dev/null || true
-'
+ExecStartPre=-/usr/bin/chvt 1
+ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/graphics/fbcon/cursor_blink'
+ExecStartPre=-/bin/systemctl stop getty@tty1.service
+ExecStartPre=-/bin/systemctl stop serial-getty@ttyS0.service
 
 ExecStart=/root/gauge/venv/bin/python3 /root/gauge/gauge.py
 
