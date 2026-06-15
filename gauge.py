@@ -334,6 +334,14 @@ def main():
     # FBIO_WAITFORVSYNC constant (works on most ARM fbdev)
     FBIO_WAITFORVSYNC = 0x40044620
 
+    # Prime the display with at least one frame immediately.
+    # This guarantees something appears even if the first vsync wait would block.
+    full_fb.fill(BG_COLOR)
+    full_fb.blit(gauge_surf, (0, FB_Y_OFF))
+    buf = _surface_to_fb565(full_fb)
+    fb_map[:] = buf
+    fb_map.flush()
+
     font       = pygame.font.Font(FONT_BOLD,            26)
     small_font = pygame.font.Font(FONT_REGULAR,         12)
     title_font = pygame.font.Font(FONT_CONDENSED,       11)
@@ -385,15 +393,17 @@ def main():
         full_fb.blit(gauge_surf, (0, FB_Y_OFF))
         buf = _surface_to_fb565(full_fb)
 
-        # Try to wait for vsync so we update during blanking period (reduces tearing).
-        # This is what helps make the kernel console so smooth.
+        fb_map[:] = buf
+        fb_map.flush()
+
+        # Wait for vsync *after* the update. This lets the first frame go out immediately,
+        # then subsequent frames are timed to the display's blanking period (like the
+        # smooth kernel console you saw). If the driver doesn't support the ioctl we just
+        # free-run at the FPS rate.
         try:
             fcntl.ioctl(fb_fd, FBIO_WAITFORVSYNC)
         except Exception:
-            pass  # driver may not support it; fall back to free-running
-
-        fb_map[:] = buf
-        fb_map.flush()
+            pass
 
         clock.tick(FPS)
 
