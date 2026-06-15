@@ -1,5 +1,7 @@
 import os
 import struct
+import mmap
+import fcntl
 
 # We render offscreen and write directly to the kernel's /dev/fb0.
 # This avoids depending on SDL's fbcon video driver (which is often missing or
@@ -324,6 +326,14 @@ def main():
     gauge_surf = pygame.Surface((SCREEN_W, SCREEN_H))
     clock = pygame.time.Clock()
 
+    # Open the framebuffer once and mmap it for fast zero-copy updates.
+    # This is much more efficient than open/write/close every frame.
+    fb_fd = open('/dev/fb0', 'r+b', buffering=0)
+    fb_map = mmap.mmap(fb_fd.fileno(), SCREEN_W * FB_H * 2)  # 240x280 RGB565 = 2 bytes/pixel
+
+    # FBIO_WAITFORVSYNC constant (works on most ARM fbdev)
+    FBIO_WAITFORVSYNC = 0x40044620
+
     font       = pygame.font.Font(FONT_BOLD,            26)
     small_font = pygame.font.Font(FONT_REGULAR,         12)
     title_font = pygame.font.Font(FONT_CONDENSED,       11)
@@ -374,12 +384,26 @@ def main():
         full_fb.fill(BG_COLOR)
         full_fb.blit(gauge_surf, (0, FB_Y_OFF))
         buf = _surface_to_fb565(full_fb)
-        with open('/dev/fb0', 'wb', buffering=0) as f:
-            f.write(buf)
+
+        # Try to wait for vsync so we update during blanking period (reduces tearing).
+        # This is what helps make the kernel console so smooth.
+        try:
+            fcntl.ioctl(fb_fd, FBIO_WAITFORVSYNC)
+        except Exception:
+            pass  # driver may not support it; fall back to free-running
+
+        fb_map[:] = buf
+        fb_map.flush()
 
         clock.tick(FPS)
 
     pygame.quit()
+
+    try:
+        fb_map.close()
+        fb_fd.close()
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     main()
