@@ -20,21 +20,26 @@ except ImportError:
 
 
 def _surface_to_fb565(surface):
-    """Convert a pygame Surface (any size) to raw RGB565 little-endian bytes
-    suitable for writing directly to /dev/fb0 provided by kernel SPI LCD drivers
-    (e.g. fb_st7789v). This gives smooth updates because the kernel handles
-    the actual panel timing and SPI.
+    """Convert a pygame Surface to raw bytes for direct write to /dev/fb0.
+
+    The kernel ST7789/fb driver expects RGB565 in the byte order that the
+    original userspace driver (driver.py) used when talking to the controller
+    over SPI. We do the same packing here (including the byte swap).
     """
     rgb = pygame.image.tostring(surface, 'RGB')
     if HAS_NUMPY:
         arr = np.frombuffer(rgb, dtype=np.uint8).reshape(-1, 3)
         rgb565 = ((arr[:, 0] & 0xF8) << 8) | ((arr[:, 1] & 0xFC) << 3) | (arr[:, 2] >> 3)
-        return rgb565.astype('<u2').tobytes()
+        # byte-swap to match what the panel driver / controller expects
+        # (identical to the conversion that used to work in the old ST7789 driver)
+        rgb565 = ((rgb565 >> 8) | ((rgb565 & 0xFF) << 8)).astype(np.uint16)
+        return rgb565.tobytes()
     else:
         out = bytearray()
         for i in range(0, len(rgb), 3):
             r, g, b = rgb[i], rgb[i + 1], rgb[i + 2]
             val = ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3)
+            val = ((val >> 8) | ((val & 0xFF) << 8))  # byte swap
             out.extend(struct.pack('<H', val))
         return bytes(out)
 
