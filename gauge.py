@@ -30,19 +30,16 @@ def _surface_to_fb565(surface):
     """
     rgb = pygame.image.tostring(surface, 'RGB')
     if HAS_NUMPY:
-        arr = np.frombuffer(rgb, dtype=np.uint8).reshape(-1, 3)
-        rgb565 = ((arr[:, 0] & 0xF8) << 8) | ((arr[:, 1] & 0xFC) << 3) | (arr[:, 2] >> 3)
-        # byte-swap to match what the panel driver / controller expects
-        # (identical to the conversion that used to work in the old ST7789 driver)
-        rgb565 = ((rgb565 >> 8) | ((rgb565 & 0xFF) << 8)).astype(np.uint16)
-        return rgb565.tobytes()
+        arr = np.frombuffer(rgb, dtype=np.uint8).reshape(-1, 3).astype(np.uint16)
+        # Kernel fb_st7789v runs the display in BGR mode, so encode as BGR565.
+        # No byte swap — numpy writes uint16 in native LE which is what the kernel expects.
+        bgr565 = ((arr[:, 2] & 0xF8) << 8) | ((arr[:, 1] & 0xFC) << 3) | (arr[:, 0] >> 3)
+        return bgr565.astype(np.uint16).tobytes()
     else:
         out = bytearray()
         for i in range(0, len(rgb), 3):
             r, g, b = rgb[i], rgb[i + 1], rgb[i + 2]
-            val = ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3)
-            val = ((val >> 8) | ((val & 0xFF) << 8))  # byte swap
-            out.extend(struct.pack('<H', val))
+            out.extend(struct.pack('<H', ((b & 0xf8) << 8) | ((g & 0xfc) << 3) | (r >> 3)))
         return bytes(out)
 
 # ── Config ────────────────────────────────────────────────
