@@ -1,13 +1,42 @@
 import os
+import struct
 
-# Must set SDL driver env vars BEFORE importing pygame so SDL2 picks fbcon at init time.
-os.environ["SDL_VIDEODRIVER"] = "fbcon"
-os.environ["SDL_FBDEV"] = "/dev/fb0"
+# We render offscreen and write directly to the kernel's /dev/fb0.
+# This avoids depending on SDL's fbcon video driver (which is often missing or
+# broken in packaged SDL2 on Armbian for these boards).
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("SDL_FBDEV", "/dev/fb0")
 
 import pygame
 import math
 from collections import deque
 from datetime import datetime
+
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+
+
+def _surface_to_fb565(surface):
+    """Convert a pygame Surface (any size) to raw RGB565 little-endian bytes
+    suitable for writing directly to /dev/fb0 provided by kernel SPI LCD drivers
+    (e.g. fb_st7789v). This gives smooth updates because the kernel handles
+    the actual panel timing and SPI.
+    """
+    rgb = pygame.image.tostring(surface, 'RGB')
+    if HAS_NUMPY:
+        arr = np.frombuffer(rgb, dtype=np.uint8).reshape(-1, 3)
+        rgb565 = ((arr[:, 0] & 0xF8) << 8) | ((arr[:, 1] & 0xFC) << 3) | (arr[:, 2] >> 3)
+        return rgb565.astype('<u2').tobytes()
+    else:
+        out = bytearray()
+        for i in range(0, len(rgb), 3):
+            r, g, b = rgb[i], rgb[i + 1], rgb[i + 2]
+            val = ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3)
+            out.extend(struct.pack('<H', val))
+        return bytes(out)
 
 # ── Config ────────────────────────────────────────────────
 SCREEN_W, SCREEN_H = 240, 240
@@ -264,54 +293,29 @@ def read_cht(channel):
         return 120 + 60 * math.sin(t * 0.2 + 1)
 
 # ── Main ──────────────────────────────────────────────────
-# Kernel fb_st7789v driver exposes /dev/fb0 as a 240×280 framebuffer.
-# The display's visible window starts at GRAM row 40, so we render the
-# 240×240 gauge into rows 40-279 of the 240×280 fb surface.
+# Kernel fb_st7789v (or equivalent) driver exposes /dev/fb0 as a 240×280
+# framebuffer. The visible round area is 240×240 starting at row 40.
+# We render to an offscreen surface and write the raw RGB565 frame directly
+# to /dev/fb0. This completely bypasses SDL's fbcon video driver (which is
+# frequently not compiled into the packaged SDL2 on these Armbian boards)
+# while still getting the smooth, tear-free updates from the kernel driver.
 FB_H      = 280
 FB_Y_OFF  = 40   # rows of invisible GRAM above the visible panel
 
 def main():
+    print("Using direct /dev/fb0 write (bypassing SDL fbcon)")
     print("SDL_VIDEODRIVER =", os.environ.get("SDL_VIDEODRIVER"))
     print("SDL_FBDEV =", os.environ.get("SDL_FBDEV"))
-    print("Checking framebuffer...")
 
     if not os.path.exists("/dev/fb0"):
-        print("ERROR: /dev/fb0 does not exist. The kernel ST7789 driver is not providing the framebuffer.")
-        print("See the README section on enabling the kernel framebuffer overlay.")
+        print("ERROR: /dev/fb0 does not exist!")
+        print("The kernel ST7789/fb driver is not providing the framebuffer.")
+        print("Fix the DT overlay first (see README).")
         raise SystemExit(1)
 
-    try:
-        pygame.init()
-        # Full framebuffer surface (240×280); gauge is blitted at y=FB_Y_OFF
-        fb = pygame.display.set_mode((SCREEN_W, FB_H), flags=0)
-    except pygame.error as e:
-        msg = str(e)
-        print("pygame.error:", msg)
-        if "fbcon" in msg.lower() or "not available" in msg.lower():
-            print("\n" + "="*60)
-            print("fbcon driver failed to initialize even though /dev/fb0 exists.")
-            print("This can happen if:")
-            print("  - The SDL2 build on this system does not include fbcon support,")
-            print("  - The active console/TTY for the framebuffer is not tty1,")
-            print("  - A getty or other process is still fighting for the console,")
-            print("  - Timing issue on boot (the service will keep retrying).")
-            print("")
-            print("From SSH you can inspect:")
-            print("  journalctl -u gauge.service -n 100 --no-pager")
-            print("  ls -l /dev/fb0")
-            print("  cat /sys/class/graphics/fb0/name 2>/dev/null || true")
-            print("  cat /proc/cmdline")
-            print("")
-            print("To temporarily get a usable console on the round display:")
-            print("  sudo systemctl stop gauge.service")
-            print("  sudo chvt 1")
-            print("  # (or start a getty: sudo systemctl start getty@tty1.service )")
-            print("")
-            print("Quick test the kernel fb is receiving data (works over SSH):")
-            print("  cat /dev/urandom > /dev/fb0   # (Ctrl-C after 1-2s)")
-            print("="*60 + "\n")
-        import sys
-        sys.exit(1)
+    pygame.init()   # dummy driver (set above) — we don't use any real video output
+
+    full_fb = pygame.Surface((SCREEN_W, FB_H))
     gauge_surf = pygame.Surface((SCREEN_W, SCREEN_H))
     clock = pygame.time.Clock()
 
@@ -360,9 +364,14 @@ def main():
         draw_legend(gauge_surf, title_font)
         draw_time(gauge_surf, time_font)
 
-        fb.fill(BG_COLOR)
-        fb.blit(gauge_surf, (0, FB_Y_OFF))
-        pygame.display.flip()
+        # Compose full fb (with y offset) and write raw to the kernel framebuffer device.
+        # This is what actually appears on the round display.
+        full_fb.fill(BG_COLOR)
+        full_fb.blit(gauge_surf, (0, FB_Y_OFF))
+        buf = _surface_to_fb565(full_fb)
+        with open('/dev/fb0', 'wb', buffering=0) as f:
+            f.write(buf)
+
         clock.tick(FPS)
 
     pygame.quit()

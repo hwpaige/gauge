@@ -7,11 +7,11 @@ Wants=local-fs.target
 Type=simple
 WorkingDirectory=/root/gauge
 # Force the kernel framebuffer driver (required for smooth updates)
-Environment=SDL_VIDEODRIVER=fbcon
+Environment=SDL_VIDEODRIVER=dummy
 Environment=SDL_FBDEV=/dev/fb0
 Environment=PYTHONUNBUFFERED=1
 
-# Aggressively take over the console (stop any getty that might be on tty1 or serial)
+# Best-effort console cleanup so nothing else is fighting the fb
 ExecStartPre=-/bin/sh -c '
   chvt 1 2>/dev/null || true
   echo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true
@@ -20,19 +20,14 @@ ExecStartPre=-/bin/sh -c '
 
 ExecStart=/root/gauge/venv/bin/python3 /root/gauge/gauge.py
 
-# Keep it alive if it crashes (it will retry every few seconds)
+# Keep it alive
 Restart=always
 RestartSec=5
 
-# Log to journal (view with journalctl -u gauge.service).
-# This prevents error text from being painted directly onto the framebuffer as "terminal" output.
-# When the gauge successfully initializes, it will draw its graphics over the fb.
+# All output (including any errors) goes to the journal.
+# The actual display output is done by direct writes to /dev/fb0 in the Python code.
 StandardOutput=journal
 StandardError=journal
-# We still try to attach to the right tty for the driver
-TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
 
 [Install]
 WantedBy=multi-user.target
