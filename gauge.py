@@ -334,14 +334,21 @@ def main():
     # FBIO_WAITFORVSYNC constant (works on most ARM fbdev)
     FBIO_WAITFORVSYNC = 0x40044620
 
-    # Prime the display with at least one frame immediately.
-    # This guarantees something appears even if the first vsync wait would block.
-    full_fb.fill(BG_COLOR)
-    full_fb.blit(gauge_surf, (0, FB_Y_OFF))
-    buf = _surface_to_fb565(full_fb)
+    # DEBUG / visibility test: immediately write a full bright red frame so you can
+    # confirm that our writes are actually reaching the panel hardware.
+    # If you see solid red for ~1.5s, then the write path works and we know the
+    # problem is in the drawing / gauge content.
+    print("DEBUG: writing full red test frame to /dev/fb0 ...")
+    red_surf = pygame.Surface((SCREEN_W, FB_H))
+    red_surf.fill((255, 0, 0))
+    buf = _surface_to_fb565(red_surf)
     fb_map[:] = buf
     fb_map.flush()
+    import time
+    time.sleep(1.5)
 
+    # Now clear to our normal BG and do a full first gauge draw + write
+    # before entering the main loop so the real app appears immediately.
     font       = pygame.font.Font(FONT_BOLD,            26)
     small_font = pygame.font.Font(FONT_REGULAR,         12)
     title_font = pygame.font.Font(FONT_CONDENSED,       11)
@@ -356,6 +363,28 @@ def main():
     hist1 = deque([150.0] * PLOT_LEN, maxlen=PLOT_LEN)
     hist2 = deque([150.0] * PLOT_LEN, maxlen=PLOT_LEN)
     frame = 0
+
+    # Do one full draw cycle for the very first real frame (using initial simulated values)
+    cht1 = read_cht(0)
+    cht2 = read_cht(1)
+    ss.fill(BG_COLOR)
+    draw_gauge_shapes(ss, gc_ss, cht1, 0, 300, LEFT_ARC_START,  LEFT_ARC_END,  gr_ss, aw_ss)
+    draw_gauge_shapes(ss, gc_ss, cht2, 0, 300, RIGHT_ARC_START, RIGHT_ARC_END, gr_ss, aw_ss)
+    draw_plot(ss, hist1, hist2, scale=SSAA)
+    gauge_surf.blit(pygame.transform.smoothscale(ss, (SCREEN_W, SCREEN_H)), (0, 0))
+
+    draw_header(gauge_surf, title_font)
+    draw_gauge_text(gauge_surf, GAUGE_CENTER, cht1, 0, 300, "CYL 1", font, small_font, LEFT_ARC_START,  LEFT_ARC_END)
+    draw_gauge_text(gauge_surf, GAUGE_CENTER, cht2, 0, 300, "CYL 2", font, small_font, RIGHT_ARC_START, RIGHT_ARC_END)
+    draw_legend(gauge_surf, title_font)
+    draw_time(gauge_surf, time_font)
+
+    full_fb.fill(BG_COLOR)
+    full_fb.blit(gauge_surf, (0, FB_Y_OFF))
+    buf = _surface_to_fb565(full_fb)
+    fb_map[:] = buf
+    fb_map.flush()
+    print("First real gauge frame written to /dev/fb0")
 
     running = True
     while running:
