@@ -1,0 +1,31 @@
+[Unit]
+Description=CHT Gauge - Round SPI Display
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/gauge
+# Force the kernel framebuffer driver (required for smooth updates)
+Environment=SDL_VIDEODRIVER=fbcon
+Environment=SDL_FBDEV=/dev/fb0
+Environment=PYTHONUNBUFFERED=1
+
+# Try to switch to the primary console and disable cursor (best effort)
+ExecStartPre=-/bin/sh -c 'chvt 1 2>/dev/null || true; echo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true'
+
+ExecStart=/root/gauge/venv/bin/python3 /root/gauge/gauge.py
+
+# Keep it alive if it crashes
+Restart=always
+RestartSec=3
+
+# Attach output to the real console so it takes over the display
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target
