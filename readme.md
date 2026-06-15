@@ -185,7 +185,7 @@ See the on-screen error message in the new gauge.py for more details and a quick
 
 `gauge.py` renders two CHT gauges using **pygame** directed at the Linux framebuffer (`/dev/fb0`) via SDL fbcon — no desktop environment required.
 
-The kernel (via a DT overlay for the ST7789 panel, typically exposing `fb_st7789v` or a tinydrm/fbdev panel) must own the SPI + DC/RST GPIOs and register the display as `/dev/fb0` (configured as 240×280 logical fb with the round 240×240 visible area starting at row 40). This gives rock-solid vsync/tearing-free updates ("super smooth with no flickering").
+The kernel (via a DT overlay for the ST7789 panel, typically exposing `fb_st7789v` or equivalent) must own the display and expose `/dev/fb0` (240×280 logical with the round 240×240 visible area at y=40). The Python code now renders offscreen and writes raw RGB565 frames directly to `/dev/fb0`. This completely avoids SDL's fbcon video driver (which is frequently missing/broken in packaged SDL2 on Armbian) while still benefiting from the kernel's smooth panel handling.
 
 The old userspace Python ST7789 + gpiod + spidev driver path has been removed from the main app (it conflicts with "Device or resource busy" once the kernel claims the pins).
 
