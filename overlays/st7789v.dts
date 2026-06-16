@@ -4,11 +4,25 @@
 / {
 	compatible = "bananapi,bpi-m4zero", "allwinner,sun50i-h616";
 
+	/* Mux PH5 as SPI1_CS0 — without this the CS pin stays unclaimed
+	 * and the display ignores all SPI traffic. */
 	fragment@0 {
+		target = <&pio>;
+		__overlay__ {
+			spi1_cs0_st7789: spi1-cs0-st7789 {
+				pins = "PH5";
+				function = "spi1";
+			};
+		};
+	};
+
+	fragment@1 {
 		target = <&spi1>;
 		__overlay__ {
 			#address-cells = <1>;
 			#size-cells = <0>;
+			pinctrl-1 = <&spi1_cs0_st7789>;
+			pinctrl-names = "default", "default";
 			status = "okay";
 
 			st7789v@0 {
