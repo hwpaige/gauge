@@ -341,8 +341,9 @@ def main():
 
     def write_frame(buf):
         if drm:
+            drm.wait_flip()         # ensure previous SPI transfer is done
             drm.back_buffer[:] = buf
-            drm.flip()          # blocks until SPI push completes
+            drm.begin_flip()        # start SPI transfer; rendering continues immediately
         else:
             fb_map[:] = buf
 

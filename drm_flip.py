@@ -248,14 +248,13 @@ class DrmFlip:
         """mmap of the buffer currently being written to (not displayed)."""
         return self._maps[self._back]
 
-    def flip(self):
+    def begin_flip(self):
         """
-        Present the back buffer on the display.
+        Submit the back buffer for display and return immediately.
 
-        Blocks until the kernel signals the page-flip-complete event, which
-        fires after the SPI transfer to the panel finishes. This prevents
-        writing to a buffer while the kernel is reading it for SPI output,
-        eliminating the tearing race entirely.
+        The SPI transfer runs in the background. Call wait_flip() before the
+        next write to back_buffer to ensure the kernel has finished reading the
+        old front buffer (which becomes the new back buffer after this call).
         """
         flip = _PageFlip(
             crtc_id=self._crtc_id,
@@ -264,13 +263,22 @@ class DrmFlip:
             user_data=0,
         )
         self._ioctl(_MODE_PAGE_FLIP, flip)
+        self._flip_pending = True
+        self._front, self._back = self._back, self._front
 
-        # Wait for the flip-complete event (emitted after SPI push finishes).
+    def wait_flip(self):
+        """Block until the in-flight SPI transfer completes."""
+        if not self._flip_pending:
+            return
         rlist, _, _ = select.select([self._fd], [], [], 2.0)
         if rlist:
-            os.read(self._fd, 64)   # drain the event
+            os.read(self._fd, 64)
+        self._flip_pending = False
 
-        self._front, self._back = self._back, self._front
+    def flip(self):
+        """Blocking flip: submit back buffer and wait for SPI to finish."""
+        self.begin_flip()
+        self.wait_flip()
 
     def close(self):
         for buf in self._maps:
