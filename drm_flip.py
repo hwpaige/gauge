@@ -174,8 +174,10 @@ class DrmFlip:
 
         conn_arr = (ctypes.c_uint32 * res.count_connectors)()
         crtc_arr = (ctypes.c_uint32 * res.count_crtcs)()
+        enc_arr  = (ctypes.c_uint32 * max(res.count_encoders, 1))()
         res.connector_id_ptr = ctypes.addressof(conn_arr)
         res.crtc_id_ptr      = ctypes.addressof(crtc_arr)
+        res.encoder_id_ptr   = ctypes.addressof(enc_arr)
         self._ioctl(_MODE_GETRESOURCES, res)
 
         self._crtc_id = int(crtc_arr[0])
@@ -187,8 +189,14 @@ class DrmFlip:
             if conn.connection != _DRM_CONNECTED:
                 continue
 
-            modes = (_ModeInfo * conn.count_modes)()
-            conn.modes_ptr = ctypes.addressof(modes)
+            modes     = (_ModeInfo      * conn.count_modes)()
+            enc_ids   = (ctypes.c_uint32 * max(conn.count_encoders, 1))()
+            props     = (ctypes.c_uint32 * max(conn.count_props, 1))()
+            prop_vals = (ctypes.c_uint64 * max(conn.count_props, 1))()
+            conn.modes_ptr       = ctypes.addressof(modes)
+            conn.encoders_ptr    = ctypes.addressof(enc_ids)
+            conn.props_ptr       = ctypes.addressof(props)
+            conn.prop_values_ptr = ctypes.addressof(prop_vals)
             self._ioctl(_MODE_GETCONNECTOR, conn)
 
             self._connector_id = int(conn_arr[i])
