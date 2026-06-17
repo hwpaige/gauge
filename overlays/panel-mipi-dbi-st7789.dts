@@ -1,0 +1,50 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "bananapi,bpi-m4zero", "allwinner,sun50i-h616";
+
+	/* Mux PH5 as SPI1_CS0 — without this the CS pin stays unclaimed
+	 * and the display ignores all SPI traffic. */
+	fragment@0 {
+		target = <&pio>;
+		__overlay__ {
+			spi1_cs0_mdb: spi1-cs0-mdb {
+				pins = "PH5";
+				function = "spi1";
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&spi1>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			pinctrl-1 = <&spi1_cs0_mdb>;
+			pinctrl-names = "default", "default";
+			status = "okay";
+
+			st7789@0 {
+				compatible = "panel-mipi-dbi-spi";
+				reg = <0>;
+				spi-max-frequency = <64000000>;
+				dc-gpios = <&pio 8 16 0>;    /* PI16, active-high (D/CX) */
+				reset-gpios = <&pio 2 2 1>;  /* PC2, active-low (RESX) */
+				write-only;
+
+				panel-timing {
+					clock-frequency = <0>;
+					hactive = <240>;
+					vactive = <280>;
+					hfront-porch = <0>;
+					hback-porch = <0>;
+					hsync-len = <0>;
+					vfront-porch = <0>;
+					vback-porch = <0>;
+					vsync-len = <0>;
+				};
+			};
+		};
+	};
+};
