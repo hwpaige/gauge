@@ -32,6 +32,8 @@
 				dc-gpios = <&pio 8 16 0>;    /* PI16, active-high (D/CX) */
 				reset-gpios = <&pio 2 2 1>;  /* PC2, active-low (RESX) */
 				write-only;
+				width-mm = <33>;
+				height-mm = <33>;
 
 				panel-timing {
 					clock-frequency = <0>;
