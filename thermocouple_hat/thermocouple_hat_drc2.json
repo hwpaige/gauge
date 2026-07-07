@@ -1,0 +1,58 @@
+** Drc report for thermocouple_hat.kicad_pcb **
+** Created on 2026-06-17T22:02:35 **
+** Report includes: Errors, Warnings **
+
+** Found 8 DRC violations **
+[silk_overlap]: Silkscreen clearance
+    Rule: board setup constraints silk; error
+    @(141.6200 mm, 94.2000 mm): PCB text 'SDA' on F.Silkscreen
+    @(137.5000 mm, 93.5000 mm): PCB text '-- DISPLAY --' on F.Silkscreen
+[silk_overlap]: Silkscreen clearance
+    Rule: board setup constraints silk; error
+    @(136.5400 mm, 94.2000 mm): PCB text 'GND' on F.Silkscreen
+    @(137.5000 mm, 93.5000 mm): PCB text '-- DISPLAY --' on F.Silkscreen
+[silk_overlap]: Silkscreen clearance
+    Rule: board setup constraints silk; error
+    @(139.0800 mm, 94.2000 mm): PCB text 'SCK' on F.Silkscreen
+    @(137.5000 mm, 93.5000 mm): PCB text '-- DISPLAY --' on F.Silkscreen
+[silk_overlap]: Silkscreen clearance
+    Rule: board setup constraints silk; error
+    @(134.0000 mm, 94.2000 mm): PCB text 'VCC' on F.Silkscreen
+    @(137.5000 mm, 93.5000 mm): PCB text '-- DISPLAY --' on F.Silkscreen
+[silk_overlap]: Silkscreen clearance
+    Rule: board setup constraints silk; error
+    @(111.0000 mm, 89.6200 mm): Reference field of J3
+    @(109.5000 mm, 90.0000 mm): PCB text 'TC1' on F.Silkscreen
+[silk_overlap]: Silkscreen clearance
+    Rule: board setup constraints silk; error
+    @(102.1700 mm, 80.0000 mm): Reference field of R1
+    @(102.8300 mm, 80.0000 mm): Reference field of R2
+[silk_over_copper]: Silkscreen clipped by solder mask
+    Local override; error
+    @(157.5000 mm, 91.7000 mm): PCB text 'T+' on F.Silkscreen
+    @(156.0000 mm, 92.0000 mm): PTH pad 1 [TC2_TPLUS] of J4
+[lib_footprint_mismatch]: Footprint 'PinSocket_2x20_P2.54mm_Vertical' does not match copy in library 'Connector_PinSocket_2.54mm'
+    Local override; warning
+    @(108.3700 mm, 74.7700 mm): Footprint J1
+
+** Found 2 unconnected pads **
+[unconnected_items]: Missing connection between items
+    Local override; error
+    @(106.4750 mm, 86.9050 mm): Pad 5 [ID_SDA] of U1 on F.Cu
+    @(141.3900 mm, 74.7700 mm): PTH pad 27 [ID_SDA] of J1
+[unconnected_items]: Missing connection between items
+    Local override; error
+    @(106.4750 mm, 85.6350 mm): Pad 6 [ID_SCL] of U1 on F.Cu
+    @(141.3900 mm, 72.2300 mm): PTH pad 28 [ID_SCL] of J1
+
+** Found 0 Footprint errors **
+
+** Ignored checks **
+    - Footprint has no courtyard defined
+    - Track endpoint not centered on via
+    - Tuning profile track geometries
+    - Footprint doesn't match symbol's footprint filters
+    - PTH inside courtyard
+    - NPTH inside courtyard
+
+** End of Report **

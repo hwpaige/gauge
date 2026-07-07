@@ -1,0 +1,30 @@
+** Drc report for thermocouple_hat.kicad_pcb **
+** Created on 2026-06-17T22:05:55 **
+** Report includes: Errors, Warnings **
+
+** Found 1 DRC violations **
+[lib_footprint_mismatch]: Footprint 'PinSocket_2x20_P2.54mm_Vertical' does not match copy in library 'Connector_PinSocket_2.54mm'
+    Local override; warning
+    @(108.3700 mm, 74.7700 mm): Footprint J1
+
+** Found 2 unconnected pads **
+[unconnected_items]: Missing connection between items
+    Local override; error
+    @(106.4750 mm, 86.9050 mm): Track [ID_SDA] on F.Cu, length 0.4005 mm
+    @(141.3900 mm, 74.7700 mm): PTH pad 27 [ID_SDA] of J1
+[unconnected_items]: Missing connection between items
+    Local override; error
+    @(106.1125 mm, 85.6350 mm): Track [ID_SCL] on F.Cu, length 0.3625 mm
+    @(141.3900 mm, 72.2300 mm): PTH pad 28 [ID_SCL] of J1
+
+** Found 0 Footprint errors **
+
+** Ignored checks **
+    - Footprint has no courtyard defined
+    - Track endpoint not centered on via
+    - Tuning profile track geometries
+    - Footprint doesn't match symbol's footprint filters
+    - PTH inside courtyard
+    - NPTH inside courtyard
+
+** End of Report **
