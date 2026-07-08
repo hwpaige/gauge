@@ -8,19 +8,21 @@ conversion and lets you:
     • monitor all 4 channels at once (live table)
     • focus a single channel with a large readout (for probing one sensor)
     • run a one-shot probe of every channel (responding? open?)
-    • change thermocouple type / units / poll rate / mains filter on the fly
+    • set the thermocouple TYPE PER CHANNEL, plus units / poll rate / filter
 
     cd ~/gauge
-    python3 thermocouple_test.py            # interactive menu (arrow keys / hotkeys)
-    python3 thermocouple_test.py --plain    # non-interactive: one line per poll (logging/SSH)
-    python3 thermocouple_test.py --once     # single read of all channels, exit
-    python3 thermocouple_test.py --tc-type J --filter 50
-    python3 thermocouple_test.py --sim      # fake data, no hardware (preview on a laptop)
-    python3 thermocouple_test.py --selftest # verify the register decoders, no hardware
+    python3 thermocouple_test.py                  # interactive menu (arrow keys / hotkeys)
+    python3 thermocouple_test.py --tc-type K,T,K,K # per-channel types (TC1..TC4)
+    python3 thermocouple_test.py --tc-type T       # one type for all channels
+    python3 thermocouple_test.py --plain           # non-interactive: one line per poll
+    python3 thermocouple_test.py --once            # single read of all channels, exit
+    python3 thermocouple_test.py --sim             # fake data, no hardware
+    python3 thermocouple_test.py --selftest        # verify the register decoders, no hardware
 
 Interactive hotkeys (work from anywhere):
     1-4 focus channel TCn    a all channels    p probe    s settings
-    c/f units    +/- poll rate    r reset min/max    q / Esc back    (q on menu quits)
+    c/f units   +/- poll rate   r reset min/max   q / Esc back   (q on menu quits)
+In the single-channel view:  ←/→ change channel   t change THIS channel's type
 
 ────────────────────────────────────────────────────────────────────────────
 HARDWARE  (from the ordered PCB netlist, thermocouple_hat/):
@@ -32,15 +34,11 @@ HARDWARE  (from the ordered PCB netlist, thermocouple_hat/):
         TC3 (U4, term J5)            -> GPIO6  (pin 31)
         TC4 (U5, term J6)            -> GPIO12 (pin 32)
   Physical terminal order, left->right: TC1, TC3, TC4, TC2.
+  Each MAX31856 is configured independently, so per-channel type just writes a
+  different CR1 to each chip.
 
-  Only GPIO7 is a native SPI0 chip-select, so all four are driven as SOFTWARE
-  chip-selects: hardware SPI0 clocks the data (spidev, no hardware CS) and lgpio
-  toggles each CS GPIO.
-
-ONE-TIME PI SETUP (see setup_pi.sh, which automates this):
-  /boot/firmware/config.txt needs:
-      dtparam=spi=on
-      dtoverlay=spi0-1cs          # SPI0 keeps only CE0 (GPIO8); frees GPIO7
+ONE-TIME PI SETUP (see setup_pi.sh):
+  /boot/firmware/config.txt needs:  dtparam=spi=on  and  dtoverlay=spi0-1cs
   then reboot, and:  sudo apt install -y python3-spidev python3-lgpio
 """
 
@@ -57,33 +55,31 @@ CHANNELS = [
     ("TC3", 6,  31),
     ("TC4", 12, 32),
 ]
-# Physical terminal position (left→right the terminals are TC1, TC3, TC4, TC2)
 TERM_POS = {"TC1": "left-most terminal", "TC3": "2nd from left",
             "TC4": "3rd from left", "TC2": "right-most terminal"}
 
-SPI_BUS, SPI_DEV = 0, 0          # /dev/spidev0.0 for clocking (CS handled in software)
+SPI_BUS, SPI_DEV = 0, 0
 SPI_MODE = 1                     # MAX31856 = SPI mode 1 (CPOL=0, CPHA=1)
-DEFAULT_SPEED_HZ = 2_000_000     # MAX31856 max 5 MHz; 2 MHz is a safe default
-DEFAULT_HZ = 4.0                 # poll rate; MAX31856 converts ~every 100 ms
-DEFAULT_TC_TYPE = "K"
-DEFAULT_FILTER = 60              # mains-rejection filter: 60 (US) or 50 (EU)
+DEFAULT_SPEED_HZ = 2_000_000
+DEFAULT_HZ = 4.0
+DEFAULT_TC_TYPE = "K"            # default type for every channel (override per-channel in the UI)
+DEFAULT_FILTER = 60             # mains-rejection filter: 60 (US) or 50 (EU); global to all chips
 
-# Temperature range for the green/amber/red zone colouring (matches gauge.py).
 RANGE_MIN, RANGE_MAX = 0, 300
 CAUTION_FRAC, DANGER_FRAC = 0.60, 0.85
 
 # ── MAX31856 registers ─────────────────────────────────────────────────────
 REG_CR0, REG_CR1, REG_MASK = 0x00, 0x01, 0x02
 REG_CJTH, REG_LTCBH, REG_SR = 0x0A, 0x0C, 0x0F
-WRITE = 0x80                     # OR into address byte for a register write
+WRITE = 0x80
 
 TC_TYPES = {"B": 0x0, "E": 0x1, "J": 0x2, "K": 0x3,
             "N": 0x4, "R": 0x5, "S": 0x6, "T": 0x7}
 TC_ORDER = ["B", "E", "J", "K", "N", "R", "S", "T"]
 
-CR0_CMODE      = 0x80            # 1 = automatic continuous conversion
-CR0_OCFAULT_01 = 0x10           # enable open-circuit fault detection
-CR0_FILTER_50  = 0x01           # 0 = 60 Hz rejection, 1 = 50 Hz
+CR0_CMODE      = 0x80
+CR0_OCFAULT_01 = 0x10
+CR0_FILTER_50  = 0x01
 
 SR_BITS = [
     (0x01, "OPEN"), (0x02, "OV/UV"), (0x04, "TC LOW"), (0x08, "TC HIGH"),
@@ -91,9 +87,8 @@ SR_BITS = [
 ]
 
 
-# ── Pure decoders (testable without hardware) ──────────────────────────────
+# ── Pure decoders (type-independent — the chip linearises per its CR1) ──────
 def decode_temperature(b2, b1, b0):
-    """LTCBH/LTCBM/LTCBL -> °C. 19-bit signed, left-justified in 24 bits, 2^-7 °C."""
     raw = (b2 << 16) | (b1 << 8) | b0
     if raw & 0x800000:
         raw -= 0x1000000
@@ -101,7 +96,6 @@ def decode_temperature(b2, b1, b0):
 
 
 def decode_coldjunction(hi, lo):
-    """CJTH/CJTL -> °C. 14-bit signed, left-justified in 16 bits, 2^-6 °C."""
     raw = (hi << 8) | lo
     if raw & 0x8000:
         raw -= 0x10000
@@ -109,7 +103,6 @@ def decode_coldjunction(hi, lo):
 
 
 def decode_max31856(regs):
-    """Decode the 6-byte burst read from CJTH (0x0A): CJTH,CJTL,LTCBH,LTCBM,LTCBL,SR."""
     cjth, cjtl, ltcbh, ltcbm, ltcbl, sr = regs[:6]
     no_data = all(x == 0xFF for x in regs[:6]) or all(x == 0x00 for x in regs[:6])
     return {
@@ -147,8 +140,6 @@ def zone(temp_c):
 
 # ── Software chip-select via lgpio ─────────────────────────────────────────
 class ChipSelect:
-    """Drives the CS GPIOs, idle HIGH, asserted LOW around a transfer."""
-
     def __init__(self, pins, gpiochip=None):
         import lgpio
         self.lg = lgpio
@@ -167,7 +158,7 @@ class ChipSelect:
         self.claimed = []
         for p in self.pins:
             try:
-                lgpio.gpio_claim_output(self.h, p, 1)   # start idle-high
+                lgpio.gpio_claim_output(self.h, p, 1)
                 self.claimed.append(p)
             except Exception as e:            # noqa: BLE001
                 busy = "GPIO_BUSY" in str(e) or "busy" in str(e).lower()
@@ -197,16 +188,17 @@ class ChipSelect:
 
 # ── Reader: spidev bus + software CS + per-channel MAX31856 config/read ────
 class Reader:
-    def __init__(self, channels, tc_type, filter_hz, speed_hz, sim=False, gpiochip=None):
+    def __init__(self, channels, tc_types, filter_hz, speed_hz, sim=False, gpiochip=None):
         self.channels = channels
-        self.tc_type = tc_type
-        self.filter_hz = filter_hz
+        self.tc_types = dict(tc_types)        # {label: 'K'/'T'/...}  — one per channel
+        self.filter_hz = filter_hz            # global (mains frequency)
         self.speed_hz = speed_hz
         self.sim = sim
         self.spi = None
         self.cs = None
         self.fatal = None
         self._t0 = time.time()
+        self._gpio_of = {label: gpio for label, gpio, _ in channels}
         if sim:
             return
         self._open(gpiochip)
@@ -235,7 +227,7 @@ class Reader:
         except Exception as e:            # noqa: BLE001
             self.fatal = str(e)
             return
-        self.reconfigure(self.tc_type, self.filter_hz)
+        self.reconfigure_all()
 
     def _xfer(self, gpio, data):
         self.cs.low(gpio)
@@ -251,20 +243,31 @@ class Reader:
         resp = self._xfer(gpio, [addr & 0x7F] + [0x00] * n)
         return resp[1:]
 
-    def _configure(self, gpio):
-        self._write_reg(gpio, REG_CR1, TC_TYPES[self.tc_type])
+    def _configure(self, label, gpio):
+        # CR1: averaging=1 sample, THIS channel's thermocouple type in the low nibble
+        self._write_reg(gpio, REG_CR1, TC_TYPES[self.tc_types[label]])
         cr0 = CR0_CMODE | CR0_OCFAULT_01 | (CR0_FILTER_50 if self.filter_hz == 50 else 0)
         self._write_reg(gpio, REG_CR0, cr0)
 
-    def reconfigure(self, tc_type, filter_hz):
-        """(Re)write CR0/CR1 on every chip — used at startup and when settings change."""
-        self.tc_type = tc_type
-        self.filter_hz = filter_hz
+    def reconfigure_all(self):
         if self.sim or self.fatal or self.spi is None:
             return
-        for _, gpio, _ in self.channels:
-            self._configure(gpio)
-        time.sleep(0.25)                 # let the first continuous conversion complete
+        for label, gpio, _ in self.channels:
+            self._configure(label, gpio)
+        time.sleep(0.25)
+
+    def set_type(self, label, tc_type):
+        """Change one channel's thermocouple type and re-write just that chip."""
+        self.tc_types[label] = tc_type
+        if self.sim or self.fatal or self.spi is None:
+            return
+        self._configure(label, self._gpio_of[label])
+        time.sleep(0.2)
+
+    def set_filter(self, filter_hz):
+        """Mains filter is global — re-write CR0 on every chip."""
+        self.filter_hz = filter_hz
+        self.reconfigure_all()
 
     def read(self, label, gpio):
         if self.sim:
@@ -274,12 +277,12 @@ class Reader:
         except Exception as e:            # noqa: BLE001
             return {"unavailable": f"read error: {e}"}
 
-    def verify(self, gpio):
-        """Read CR1 back to confirm a chip is actually responding on this CS."""
+    def verify(self, label, gpio):
+        """Read CR1 back to confirm the chip is responding and set to the right type."""
         if self.sim:
             return True
         try:
-            return self._read_regs(gpio, REG_CR1, 1)[0] == TC_TYPES[self.tc_type]
+            return self._read_regs(gpio, REG_CR1, 1)[0] == TC_TYPES[self.tc_types[label]]
         except Exception:
             return False
 
@@ -335,10 +338,11 @@ def run_plain(reader, args):
             parts = []
             for label, gpio, _ in reader.channels:
                 r = reader.read(label, gpio)
+                t = reader.tc_types[label]
                 if "unavailable" in r:
-                    parts.append(f"{label} {r['unavailable']}")
+                    parts.append(f"{label}({t}) {r['unavailable']}")
                 else:
-                    parts.append(f"{label} {fmt_temp(r['temp_c'], args.fahrenheit)} {status_text(r)}")
+                    parts.append(f"{label}({t}) {fmt_temp(r['temp_c'], args.fahrenheit)} {status_text(r)}")
             print(f"[{time.strftime('%H:%M:%S')}]  " + "   ".join(parts), flush=True)
             if args.once:
                 return
@@ -381,8 +385,6 @@ class App:
         self.reader = reader
         self.hz = args.hz
         self.fahrenheit = args.fahrenheit
-        self.tc_type = args.tc_type
-        self.filter_hz = args.filter_hz
         self.running = True
         self.state = "menu"
         self.menu_sel = 0
@@ -450,6 +452,9 @@ class App:
     def conv(self, c):
         return c_to_f(c) if self.fahrenheit else c
 
+    def types_summary(self):
+        return "/".join(self.reader.tc_types[l] for l, _, _ in self.reader.channels)
+
     def poll(self):
         for label, gpio, _ in self.reader.channels:
             r = self.reader.read(label, gpio)
@@ -479,12 +484,13 @@ class App:
 
     def s_menu(self):
         self.header("THERMOCOUPLE HAT TEST   —   MAX31856 ×4",
-                    f"{self.tc_type}-type · {self.filter_hz} Hz filter · {self.hz:g} Hz poll · {self.unit()}"
+                    f"types {self.types_summary()} · {self.reader.filter_hz} Hz filter · "
+                    f"{self.hz:g} Hz poll · {self.unit()}"
                     + ("   [SPI OK]" if not self.reader.fatal else "   [NO HARDWARE — see below]"))
         items = ["Monitor all 4 channels",
                  "Focus a single channel",
                  "Quick probe (one-shot)",
-                 "Settings  (type / units / rate / filter)",
+                 "Settings  (per-channel type / units / rate / filter)",
                  "Quit"]
         for i, it in enumerate(items):
             y = 4 + i
@@ -497,44 +503,52 @@ class App:
             self._fatal_banner(4 + len(items) + 1)
         self.footer("↑↓ move   Enter select   1-4 focus TCn   a all   p probe   s settings   q quit")
 
+    # all-channels table column x-positions
+    _X = dict(lbl=2, ty=6, cs=9, temp=17, cj=28, st=38, mn=49, mx=56, raw=64)
+
     def s_all(self):
-        self.header(f"ALL CHANNELS   —   MAX31856 ×4 · {self.tc_type}-type · {self.hz:g} Hz · {self.unit()}")
+        X = self._X
+        self.header(f"ALL CHANNELS   —   MAX31856 ×4 · {self.hz:g} Hz · {self.unit()}")
         if self._fatal_banner():
             self.footer("q / Esc  back to menu")
             return
-        self.put(3, 2, f"{'CH':<4}{'CS':<9}{'TEMP':>9}  {'COLD-J':>8}  "
-                       f"{'STATUS':<9}{'MIN':>7}{'MAX':>7}   RAW",
-                 self.cp(self.CD) | self.curses.A_DIM)
+        dim = self.cp(self.CD) | self.curses.A_DIM
+        for name, x in (("CH", X["lbl"]), ("TY", X["ty"]), ("CS", X["cs"]),
+                        ("TEMP", X["temp"] + 2), ("COLD-J", X["cj"]), ("STATUS", X["st"]),
+                        ("MIN", X["mn"]), ("MAX", X["mx"]), ("RAW", X["raw"])):
+            self.put(3, x, name, dim)
         for i, (label, gpio, pin) in enumerate(self.reader.channels):
             r = self.readings.get(label, {})
             st = self.stats[label]
             y = 4 + i
-            self.put(y, 2, f"{label:<4}", self.cp(self.CT) | self.curses.A_BOLD)
-            self.put(y, 6, f"GPIO{gpio:<5}", self.cp(self.CD) | self.curses.A_DIM)
+            self.put(y, X["lbl"], f"{label}", self.cp(self.CT) | self.curses.A_BOLD)
+            self.put(y, X["ty"], self.reader.tc_types[label], self.cp(self.CH) | self.curses.A_BOLD)
+            self.put(y, X["cs"], f"GPIO{gpio}", dim)
             stxt = status_text(r) if r else "…"
             if not r or "unavailable" in r or r.get("no_data") or not r.get("ok", False):
-                self.put(y, 15, f"{'---':>9}", self.cp(self.CE))
-                self.put(y, 26, f"{'---':>8}", self.cp(self.CD) | self.curses.A_DIM)
-                self.put(y, 36, f"{stxt:<9}", self.cp(self.CE) | self.curses.A_BOLD)
+                self.put(y, X["temp"], f"{'---':>7}", self.cp(self.CE))
+                self.put(y, X["cj"], f"{'---':>6}", dim)
+                self.put(y, X["st"], f"{stxt:<9}", self.cp(self.CE) | self.curses.A_BOLD)
             else:
-                self.put(y, 15, f"{self.conv(r['temp_c']):8.1f}{'F' if self.fahrenheit else 'C'}",
+                self.put(y, X["temp"], f"{self.conv(r['temp_c']):6.1f}{'F' if self.fahrenheit else 'C'}",
                          self.cp(self.zc[zone(r['temp_c'])]) | self.curses.A_BOLD)
-                self.put(y, 26, f"{self.conv(r['cj_c']):7.1f}{'F' if self.fahrenheit else 'C'}",
+                self.put(y, X["cj"], f"{self.conv(r['cj_c']):5.1f}{'F' if self.fahrenheit else 'C'}",
                          self.cp(self.CD))
-                self.put(y, 36, f"{stxt:<9}", self.cp(self.CG) | self.curses.A_BOLD)
+                self.put(y, X["st"], f"{stxt:<9}", self.cp(self.CG) | self.curses.A_BOLD)
             lo = "  --" if st.tmin is None else f"{self.conv(st.tmin):.0f}"
             hi = "  --" if st.tmax is None else f"{self.conv(st.tmax):.0f}"
-            self.put(y, 45, f"{lo:>6}{hi:>7}", self.cp(self.CD) | self.curses.A_DIM)
+            self.put(y, X["mn"], f"{lo:>5}", dim)
+            self.put(y, X["mx"], f"{hi:>5}", dim)
             if r and "unavailable" not in r:
-                self.put(y, 60, f"0x{r.get('raw', 0):06X} sr{r.get('sr', 0):02X}",
-                         self.cp(self.CD) | self.curses.A_DIM)
+                self.put(y, X["raw"], f"0x{r.get('raw', 0):06X} sr{r.get('sr', 0):02X}", dim)
         self.footer("1-4 focus   c/f units   +/- rate   r reset   p probe   s settings   q back")
 
     def s_pick(self):
         self.header("FOCUS A SINGLE CHANNEL", "pick a channel to watch up close")
         for i, (label, gpio, pin) in enumerate(self.reader.channels):
             y = 4 + i
-            txt = f"{label}   GPIO{gpio} (pin {pin})   {TERM_POS.get(label, '')}"
+            txt = (f"{label}  [{self.reader.tc_types[label]}]  GPIO{gpio} (pin {pin})  "
+                   f"{TERM_POS.get(label, '')}")
             if i == self.pick_sel:
                 _, w = self.scr.getmaxyx()
                 self.put(y, 1, (" ▶ " + txt).ljust(max(0, w - 2)), self.cp(self.CSEL) | self.curses.A_BOLD)
@@ -545,7 +559,7 @@ class App:
     def s_single(self):
         label, gpio, pin = self.reader.channels[self.single_idx]
         self.header(f"{label}   —   GPIO{gpio} (pin {pin})   —   {TERM_POS.get(label, '')}",
-                    f"{self.tc_type}-type · {self.hz:g} Hz poll")
+                    f"{self.reader.tc_types[label]}-type · {self.hz:g} Hz poll")
         if self._fatal_banner():
             self.footer("←→ channel   q back")
             return
@@ -556,7 +570,6 @@ class App:
             txt = f"{self.conv(r['temp_c']):.1f}"
             draw_big(self.put, 4, 4, txt, self.cp(self.zc[zone(r['temp_c'])]) | self.curses.A_BOLD)
             self.put(5, 4 + len(txt) * 4 + 1, self.unit(), self.cp(self.CD) | self.curses.A_BOLD)
-            # range bar
             _, w = self.scr.getmaxyx()
             barw = max(10, min(48, w - 8))
             frac = max(0.0, min(1.0, (r['temp_c'] - RANGE_MIN) / (RANGE_MAX - RANGE_MIN)))
@@ -566,25 +579,27 @@ class App:
         else:
             draw_big(self.put, 4, 4, "---", self.cp(self.CE) | self.curses.A_BOLD)
         stxt, sattr = self.status_attr(r) if r else ("…", self.cp(self.CD))
-        self.put(12, 4, f"cold junction : {self.conv(r['cj_c']):6.1f} {self.unit()}"
+        self.put(12, 4, f"type          : {self.reader.tc_types[label]}   (press t to change)",
+                 self.cp(self.CH))
+        self.put(13, 4, f"cold junction : {self.conv(r['cj_c']):6.1f} {self.unit()}"
                  if ok else "cold junction :   ---", self.cp(self.CD))
-        self.put(13, 4, "status        : ", self.cp(self.CD))
-        self.put(13, 20, stxt, sattr)
+        self.put(14, 4, "status        : ", self.cp(self.CD))
+        self.put(14, 20, stxt, sattr)
         lo = "--" if st.tmin is None else f"{self.conv(st.tmin):.1f}"
         hi = "--" if st.tmax is None else f"{self.conv(st.tmax):.1f}"
-        self.put(14, 4, f"min / max     : {lo} / {hi} {self.unit()}", self.cp(self.CD))
+        self.put(15, 4, f"min / max     : {lo} / {hi} {self.unit()}", self.cp(self.CD))
         faults = ", ".join(r.get("faults", [])) or "none"
-        self.put(15, 4, f"faults        : {faults}",
+        self.put(16, 4, f"faults        : {faults}",
                  self.cp(self.CE if r.get("faults") else self.CD))
-        self.put(16, 4, f"raw / SR      : 0x{r.get('raw', 0):06X} / 0x{r.get('sr', 0):02X}"
+        self.put(17, 4, f"raw / SR      : 0x{r.get('raw', 0):06X} / 0x{r.get('sr', 0):02X}"
                  f"   n={st.n} err={st.err}" if r else "",
                  self.cp(self.CD) | self.curses.A_DIM)
-        self.footer("←→ change channel   c/f units   r reset   +/- rate   a all   q back")
+        self.footer("←→ channel   t change type   c/f units   r reset   +/- rate   a all   q back")
 
     def enter_probe(self):
         self.probe_rows = []
         for label, gpio, pin in self.reader.channels:
-            responding = self.reader.verify(gpio)
+            responding = self.reader.verify(label, gpio)
             r = self.reader.read(label, gpio)
             self.probe_rows.append((label, gpio, pin, responding, r))
         self.state = "probe"
@@ -594,42 +609,48 @@ class App:
         if self._fatal_banner():
             self.footer("q back   any other key re-probe")
             return
-        self.put(3, 2, f"{'CH':<4}{'CS':<9}{'CHIP':<14}{'READING':>10}  STATUS",
+        self.put(3, 2, f"{'CH':<4}{'TY':<4}{'CS':<9}{'CHIP':<14}{'READING':>10}  STATUS",
                  self.cp(self.CD) | self.curses.A_DIM)
         for i, (label, gpio, pin, responding, r) in enumerate(self.probe_rows):
             y = 4 + i
             self.put(y, 2, f"{label:<4}", self.cp(self.CT) | self.curses.A_BOLD)
-            self.put(y, 6, f"GPIO{gpio:<5}", self.cp(self.CD) | self.curses.A_DIM)
+            self.put(y, 6, f"{self.reader.tc_types[label]:<4}", self.cp(self.CH) | self.curses.A_BOLD)
+            self.put(y, 10, f"GPIO{gpio:<5}", self.cp(self.CD) | self.curses.A_DIM)
             chip = "responding" if responding else "NO RESPONSE"
-            self.put(y, 15, f"{chip:<14}",
+            self.put(y, 19, f"{chip:<14}",
                      self.cp(self.CG if responding else self.CE) | self.curses.A_BOLD)
             stxt, sattr = self.status_attr(r)
             rd = f"{self.conv(r['temp_c']):8.1f}{'F' if self.fahrenheit else 'C'}" if r.get("ok") else "     ---"
-            self.put(y, 29, f"{rd:>10}", self.cp(self.CD))
-            self.put(y, 41, stxt, sattr)
+            self.put(y, 33, f"{rd:>10}", self.cp(self.CD))
+            self.put(y, 45, stxt, sattr)
         self.put(4 + len(self.probe_rows) + 1, 2,
                  "‘responding’ = the MAX31856 answered on SPI.  OPEN = no thermocouple wired.",
                  self.cp(self.CD) | self.curses.A_DIM)
         self.footer("r re-probe   1-4 focus   a all   q back")
 
+    def _settings_rows(self):
+        rows = []
+        for label, _, _ in self.reader.channels:
+            rows.append((f"{label} type", self.reader.tc_types[label], "◀▶ B E J K N R S T", "type", label))
+        rows.append(("Units", "Fahrenheit" if self.fahrenheit else "Celsius", "◀▶ toggle", "units", None))
+        rows.append(("Poll rate", f"{self.hz:g} Hz", "◀▶ 1-20 Hz", "poll", None))
+        rows.append(("Mains filter", f"{self.reader.filter_hz} Hz", "◀▶ 50 / 60 Hz", "filter", None))
+        return rows
+
     def s_settings(self):
-        self.header("SETTINGS")
-        rows = [
-            ("Thermocouple type", self.tc_type, "◀ ▶ cycle B E J K N R S T"),
-            ("Units", "Fahrenheit" if self.fahrenheit else "Celsius", "◀ ▶ toggle"),
-            ("Poll rate", f"{self.hz:g} Hz", "◀ ▶ 1-20 Hz"),
-            ("Mains filter", f"{self.filter_hz} Hz", "◀ ▶ 50 / 60 Hz"),
-        ]
-        for i, (name, val, hint) in enumerate(rows):
-            y = 4 + i * 2
+        self.header("SETTINGS", "thermocouple type is per-channel; units/rate/filter are global")
+        rows = self._settings_rows()
+        for i, (name, val, hint, kind, key) in enumerate(rows):
+            y = 3 + i
             sel = (i == self.set_sel)
             attr = self.cp(self.CSEL) | self.curses.A_BOLD if sel else self.cp(self.CD)
-            self.put(y, 2, f"{'▶ ' if sel else '  '}{name:<22}", attr)
-            self.put(y, 28, f"[ {val:^10} ]", self.cp(self.CT) | self.curses.A_BOLD)
+            self.put(y, 2, f"{'▶ ' if sel else '  '}{name:<16}", attr)
+            valc = self.CH if kind == "type" else self.CT
+            self.put(y, 22, f"[ {val:^10} ]", self.cp(valc) | self.curses.A_BOLD)
             if sel:
-                self.put(y, 44, hint, self.cp(self.CD) | self.curses.A_DIM)
-        self.put(4 + len(rows) * 2 + 1, 2,
-                 "type / filter changes re-write CR0/CR1 on all four chips.",
+                self.put(y, 38, hint, self.cp(self.CD) | self.curses.A_DIM)
+        self.put(3 + len(rows) + 1, 2,
+                 "type / filter changes re-write the chip register(s) immediately.",
                  self.cp(self.CD) | self.curses.A_DIM)
         self.footer("↑↓ row   ◀▶ change value   q back")
 
@@ -640,24 +661,26 @@ class App:
         else:
             self.state = "menu"
 
+    def _cycle_type(self, label, delta):
+        cur = self.reader.tc_types[label]
+        self.reader.set_type(label, TC_ORDER[(TC_ORDER.index(cur) + delta) % len(TC_ORDER)])
+
     def adjust_setting(self, delta):
-        if self.set_sel == 0:      # TC type
-            idx = (TC_ORDER.index(self.tc_type) + delta) % len(TC_ORDER)
-            self.tc_type = TC_ORDER[idx]
-            self.reader.reconfigure(self.tc_type, self.filter_hz)
-        elif self.set_sel == 1:    # units
+        rows = self._settings_rows()
+        name, val, hint, kind, key = rows[self.set_sel]
+        if kind == "type":
+            self._cycle_type(key, delta)
+        elif kind == "units":
             self.fahrenheit = not self.fahrenheit
-        elif self.set_sel == 2:    # poll rate
+        elif kind == "poll":
             self.hz = min(20.0, max(1.0, self.hz + delta))
-        elif self.set_sel == 3:    # filter
-            self.filter_hz = 50 if self.filter_hz == 60 else 60
-            self.reader.reconfigure(self.tc_type, self.filter_hz)
+        elif kind == "filter":
+            self.reader.set_filter(50 if self.reader.filter_hz == 60 else 60)
 
     def handle(self, k):
         c = self.curses
         if k == -1:
             return
-        # global hotkeys
         if k in (ord('q'), ord('Q'), 27):
             self.back(); return
         if k in (ord('a'), ord('A')):
@@ -684,7 +707,6 @@ class App:
         if k in (ord('s'), ord('S')) and self.state != "settings":
             self.state = "settings"; self.set_sel = 0; return
 
-        # state-specific
         if self.state == "menu":
             if k in (c.KEY_UP, ord('k')):
                 self.menu_sel = max(0, self.menu_sel - 1)
@@ -704,11 +726,14 @@ class App:
                 self.single_idx = (self.single_idx - 1) % len(self.reader.channels)
             elif k in (c.KEY_RIGHT, ord(']'), ord('l')):
                 self.single_idx = (self.single_idx + 1) % len(self.reader.channels)
+            elif k in (ord('t'), ord('T')):
+                self._cycle_type(self.reader.channels[self.single_idx][0], 1)
         elif self.state == "settings":
+            n = len(self._settings_rows())
             if k in (c.KEY_UP, ord('k')):
                 self.set_sel = max(0, self.set_sel - 1)
             elif k in (c.KEY_DOWN, ord('j')):
-                self.set_sel = min(3, self.set_sel + 1)
+                self.set_sel = min(n - 1, self.set_sel + 1)
             elif k in (c.KEY_LEFT, ord('h')):
                 self.adjust_setting(-1)
             elif k in (c.KEY_RIGHT, ord('l'), 10, 13, c.KEY_ENTER):
@@ -768,10 +793,24 @@ def run_selftest():
 
 
 # ── main ───────────────────────────────────────────────────────────────────
+def parse_types(spec, channels):
+    """'K' -> all K;  'K,T,K,K' -> per channel. Returns {label: TYPE}."""
+    parts = [p.strip().upper() for p in str(spec).split(",")]
+    if len(parts) == 1:
+        parts = parts * len(channels)
+    if len(parts) != len(channels):
+        raise ValueError(f"give 1 type or {len(channels)} comma-separated, got {len(parts)}")
+    for p in parts:
+        if p not in TC_TYPES:
+            raise ValueError(f"unknown type {p!r}; choose from {' '.join(TC_ORDER)}")
+    return {ch[0]: p for ch, p in zip(channels, parts)}
+
+
 def parse_args(argv):
     p = argparse.ArgumentParser(description="Interactive 4-channel MAX31856 thermocouple HAT tester")
-    p.add_argument("--tc-type", choices=list(TC_TYPES), default=DEFAULT_TC_TYPE,
-                   help=f"thermocouple type (default: {DEFAULT_TC_TYPE})")
+    p.add_argument("--tc-type", default=DEFAULT_TC_TYPE,
+                   help="thermocouple type: one value for all channels (e.g. K), or "
+                        "comma-separated per channel TC1..TC4 (e.g. K,T,K,K). Types: B E J K N R S T")
     p.add_argument("--filter", type=int, choices=(50, 60), default=DEFAULT_FILTER,
                    dest="filter_hz", help="mains-rejection filter Hz (default: 60)")
     p.add_argument("--speed", type=int, default=DEFAULT_SPEED_HZ, dest="speed_hz",
@@ -791,7 +830,13 @@ def main(argv=None):
     if args.selftest:
         return run_selftest()
 
-    reader = Reader(CHANNELS, args.tc_type, args.filter_hz, args.speed_hz,
+    try:
+        tc_types = parse_types(args.tc_type, CHANNELS)
+    except ValueError as e:
+        sys.stderr.write(f"--tc-type: {e}\n")
+        return 2
+
+    reader = Reader(CHANNELS, tc_types, args.filter_hz, args.speed_hz,
                     sim=args.sim, gpiochip=args.gpiochip)
 
     if not args.sim and reader.fatal:
@@ -804,8 +849,8 @@ def main(argv=None):
     if (args.plain or args.once) and not args.sim and not reader.fatal:
         print("Probing channels (CR1 read-back):")
         for label, gpio, pin in CHANNELS:
-            print(f"  {label} GPIO{gpio} (pin {pin}): "
-                  f"{'responding' if reader.verify(gpio) else 'NO RESPONSE'}")
+            print(f"  {label} {reader.tc_types[label]}-type GPIO{gpio} (pin {pin}): "
+                  f"{'responding' if reader.verify(label, gpio) else 'NO RESPONSE'}")
         print()
 
     try:
